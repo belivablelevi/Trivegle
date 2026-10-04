@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trivegle — Talk to strangers. Out-think them.</title>
+  <meta name="description" content="Get matched with a random stranger, battle through multi-round trivia, chat between rounds, and climb the leaderboard.">
+  <meta property="og:title" content="Trivegle — trivia battles with strangers">
+  <meta property="og:description" content="Mog strangers with your brain. Multi-round 1v1 trivia + chat + leaderboards.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="logo" href="#" data-nav="home"><span class="logo-tri">Tri</span>vegle</a>
+    <span class="tagline">Talk to strangers. Out-think them.</span>
+    <nav>
+      <span class="online"><span class="dot"></span><b id="online-count">–</b> online</span>
+      <button class="link" data-nav="leaderboard">Leaderboard</button>
+      <button class="link" data-modal="plus-modal">Trivegle+</button>
+      <button class="link" data-modal="advertise-modal">Advertise</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- HOME -->
+    <section id="screen-home" class="screen active">
+      <div class="home-grid">
+        <div class="card hero">
+          <h1>Mog strangers <span class="accent">with your brain.</span></h1>
+          <p class="sub">Get paired with a random person. Three rounds of trivia. Chat between rounds. Winner climbs the leaderboard. Last round is worth <b>double</b>.</p>
+
+          <label class="field">
+            <span>Your name</span>
+            <input id="name-input" maxlength="16" placeholder="e.g. QuizGoblin" autocomplete="off">
+          </label>
+          <p id="name-error" class="error" hidden></p>
+
+          <label class="agree">
+            <input type="checkbox" id="agree-input">
+            <span>I'm 13 or older and agree to the <button class="link inline" data-modal="rules-modal">rules</button>.</span>
+          </label>
+
+          <div class="cta-row">
+            <button id="play-ranked" class="btn primary big">⚔️ Battle a stranger</button>
+          </div>
+          <div class="practice-row">
+            <button id="play-practice" class="btn ghost">🤖 Practice vs bot</button>
+            <select id="difficulty">
+              <option value="easy">Easy</option>
+              <option value="medium" selected>Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
+        </div>
+
+        <aside class="side">
+          <div class="card profile" id="profile-card">
+            <h3>Your stats</h3>
+            <div class="stat-grid">
+              <div><b id="p-rating">1000</b><span>Rating</span></div>
+              <div><b id="p-record">0–0</b><span>W–L</span></div>
+              <div><b id="p-streak">0</b><span>Streak</span></div>
+              <div><b id="p-acc">0%</b><span>Accuracy</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Top moggers <button class="link small" data-nav="leaderboard">see all →</button></h3>
+            <ol id="lb-preview" class="lb-mini"></ol>
+          </div>
+          <div class="ad-slot" data-ad="landing"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- QUEUE -->
+    <section id="screen-queue" class="screen">
+      <div class="card center queue-card">
+        <div class="spinner"></div>
+        <h2>Looking for a stranger…</h2>
+        <p class="muted"><span id="queue-time">0</span>s · <span id="queue-searching">0</span> searching</p>
+        <p class="muted" id="queue-hint" hidden>Quiet right now. Warm up against a bot instead, then try again.</p>
+        <div class="cta-row">
+          <button id="queue-practice" class="btn ghost">🤖 Practice vs bot instead</button>
+          <button id="queue-cancel" class="btn">Cancel</button>
+        </div>
+        <p class="tip" id="queue-tip"></p>
+      </div>
+      <div class="ad-slot wide" data-ad="queue"></div>
+    </section>
+
+    <!-- MATCH -->
+    <section id="screen-match" class="screen">
+      <div class="match-grid">
+        <div class="arena">
+          <div class="scorebar">
+            <div class="side-score you">
+              <span class="label">You</span>
+              <span class="name" id="you-name"></span>
+              <span class="score" id="you-score">0</span>
+            </div>
+            <div class="round-info">
+              <span id="round-label">Round 1/3</span>
+              <span id="mult-label" class="mult" hidden>2× POINTS</span>
+            </div>
+            <div class="side-score opp">
+              <span class="label" id="opp-label">Stranger</span>
+              <span class="name" id="opp-name"></span>
+              <span class="score" id="opp-score">0</span>
+            </div>
+          </div>
+
+          <div class="stage" id="stage">
+            <!-- filled by app.js -->
+          </div>
+        </div>
+
+        <div class="chat card">
+          <div class="chat-head">
+            <span>Chat</span>
+            <span class="chat-actions">
+              <button class="link small" id="block-btn" title="Never match with this player again">Block</button>
+              <button class="link small danger" id="report-btn">Report</button>
+            </span>
+          </div>
+          <div class="chat-log" id="chat-log"></div>
+          <form class="chat-form" id="chat-form">
+            <input id="chat-input" maxlength="200" placeholder="Say something…" autocomplete="off">
+            <button class="btn small">Send</button>
+          </form>
+          <div class="chat-foot">
+            <button class="btn small" id="next-btn">⏭ Next stranger</button>
+            <button class="btn small ghost" id="home-btn">Home</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LEADERBOARD -->
+    <section id="screen-leaderboard" class="screen">
+      <div class="card">
+        <h2>🏆 Leaderboard</h2>
+        <p class="muted">Ranked battles only. Rating uses Elo — beating higher-rated players is worth more.</p>
+        <div class="table-wrap">
+          <table class="lb-table">
+            <thead><tr><th>#</th><th>Player</th><th>Rating</th><th>W–L–D</th><th>Best streak</th><th>Accuracy</th></tr></thead>
+            <tbody id="lb-body"></tbody>
+          </table>
+        </div>
+        <button class="btn" data-nav="home">← Back</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>© Trivegle</span>
+    <button class="link small" data-modal="rules-modal">Rules &amp; safety</button>
+    <button class="link small" data-modal="advertise-modal">Advertise</button>
+    <span class="muted">Text chat is filtered and moderated. Never share personal info.</span>
+  </footer>
+
+  <!-- MODALS -->
+  <dialog id="rules-modal" class="modal">
+    <h2>Rules &amp; safety</h2>
+    <ul>
+      <li>You must be 13 or older to play.</li>
+      <li>No harassment, hate speech, sexual content, or threats.</li>
+      <li>Don't share personal info (address, phone, socials). Links and contact handles are removed automatically.</li>
+      <li>Use <b>Report</b> if someone breaks the rules — reports include the chat transcript and are reviewed.</li>
+      <li>Use <b>Block</b> to never be matched with someone again.</li>
+      <li>Bots are always labelled as bots.</li>
+    </ul>
+    <form method="dialog"><button class="btn primary">Got it</button></form>
+  </dialog>
+
+  <dialog id="plus-modal" class="modal">
+    <h2>Trivegle+ <span class="pill">coming soon</span></h2>
+    <p>Support Trivegle and flex on strangers.</p>
+    <ul>
+      <li>🚫 No ads</li>
+      <li>✨ Animated name flair &amp; profile badges</li>
+      <li>🎯 Pick your categories in practice mode</li>
+      <li>📊 Detailed stats &amp; match history</li>
+      <li>🏳️ Custom "you got mogged" banners</li>
+    </ul>
+    <p class="muted">Cosmetic only — no pay-to-win. $3.99/mo or $29.99/yr.</p>
+    <form method="dialog"><button class="btn primary">Notify me</button></form>
+  </dialog>
+
+  <dialog id="advertise-modal" class="modal">
+    <h2>Advertise on Trivegle</h2>
+    <p>Reach a young, highly engaged audience between rounds — never during questions.</p>
+    <ul>
+      <li><b>Sponsored category</b> — brand a full trivia round ("Science, presented by …")</li>
+      <li><b>Queue &amp; results placements</b> — display ads where players are already pausing</li>
+      <li><b>Weekly tournaments</b> — title-sponsor a prize leaderboard</li>
+    </ul>
+    <p>Email <b>ads@trivegle.example</b> for the media kit.</p>
+    <form method="dialog"><button class="btn primary">Close</button></form>
+  </dialog>
+
+  <dialog id="report-modal" class="modal">
+    <h2>Report player</h2>
+    <form method="dialog" id="report-form">
+      <label class="radio"><input type="radio" name="reason" value="harassment" checked> Harassment or bullying</label>
+      <label class="radio"><input type="radio" name="reason" value="hate"> Hate speech</label>
+      <label class="radio"><input type="radio" name="reason" value="sexual"> Sexual content</label>
+      <label class="radio"><input type="radio" name="reason" value="underage"> Seems under 13</label>
+      <label class="radio"><input type="radio" name="reason" value="spam"> Spam or scam</label>
+      <div class="cta-row">
+        <button class="btn danger" value="submit">Report &amp; block</button>
+        <button class="btn ghost" value="cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
