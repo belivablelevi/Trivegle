@@ -20,6 +20,7 @@ Post 1–2 clips a day from a brand account. Formats that work for Omegle-style 
 3. **"Questions only Gen Z gets right"**: clips from the Internet Culture category.
 4. **Chat-break moments**: funny answers to topic prompts (with permission, usernames blurred).
 5. **"I let a bot rate my IQ"**: practice mode vs Hard bot.
+6. **Camera-mode reactions**: a split-screen of your face when you lose a close final round. Only film yourself, or get written consent from the other player. Never post a stranger's face.
 
 Hooks to test in the first second:
 - "This stranger thought they could out-trivia me 💀"
@@ -81,5 +82,6 @@ Hooks to test in the first second:
 
 - Don't use Omegle's or OMOGLE's logos or trademarks in ads. Describe yourself as "Omegle-style" rather than implying a connection.
 - Keep "mog" trash talk playful. No body-shaming in ads or prompts.
-- Ads and clips must not show other users' chat without consent. Blur names.
+- Ads and clips must not show other users' chat or faces without consent. Blur names.
+- Lead with **Text mode** in paid ads, and never target camera-mode messaging at anyone under 18.
 - Never target ads to users under 13.

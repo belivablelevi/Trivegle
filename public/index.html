@@ -34,12 +34,32 @@
             <span>Your name</span>
             <input id="name-input" maxlength="16" placeholder="e.g. QuizGoblin" autocomplete="off">
           </label>
-          <p id="name-error" class="error" hidden></p>
+
+          <div class="mode-picker" role="radiogroup" aria-label="Battle mode">
+            <label class="mode-option">
+              <input type="radio" name="mode" value="text" checked>
+              <span><b>💬 Text mode</b><small>Chat only. No camera. 13+</small></span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="mode" value="camera">
+              <span><b>📷 Camera mode</b><small>Face-to-face battles. 18+ only</small></span>
+            </label>
+          </div>
+          <p class="mode-note muted" id="camera-note" hidden>
+            You'll only be matched with other camera players. Their video starts <b>blurred</b> until you tap reveal,
+            and your mic starts muted. You can turn your camera off anytime.
+          </p>
 
           <label class="agree">
             <input type="checkbox" id="agree-input">
             <span>I'm 13 or older and agree to the <button class="link inline" data-modal="rules-modal">rules</button>.</span>
           </label>
+          <label class="agree" id="adult-row" hidden>
+            <input type="checkbox" id="adult-input">
+            <span>I'm <b>18 or older</b> (required for camera mode).</span>
+          </label>
+
+          <p id="name-error" class="error" hidden></p>
 
           <div class="cta-row">
             <button id="play-ranked" class="btn primary big">⚔️ Battle a stranger</button>
@@ -110,6 +130,26 @@
             </div>
           </div>
 
+          <div class="video-row" id="video-row" hidden>
+            <div class="video-tile opp">
+              <video id="remote-video" autoplay playsinline></video>
+              <div class="video-cover" id="remote-cover">
+                <span id="remote-status">Connecting camera…</span>
+                <button class="btn small" id="reveal-btn" hidden>👁 Reveal stranger</button>
+              </div>
+              <span class="video-label">Stranger</span>
+            </div>
+            <div class="video-tile you">
+              <video id="local-video" autoplay playsinline muted></video>
+              <span class="video-label">You</span>
+              <div class="video-controls">
+                <button class="icon-btn" id="cam-btn" title="Turn camera off">📷</button>
+                <button class="icon-btn off" id="mic-btn" title="Unmute mic">🔇</button>
+                <button class="icon-btn" id="hide-btn" title="Hide stranger's video">🙈</button>
+              </div>
+            </div>
+          </div>
+
           <div class="stage" id="stage">
             <!-- filled by app.js -->
           </div>
@@ -156,14 +196,15 @@
     <span>© Trivegle</span>
     <button class="link small" data-modal="rules-modal">Rules &amp; safety</button>
     <button class="link small" data-modal="advertise-modal">Advertise</button>
-    <span class="muted">Text chat is filtered and moderated. Never share personal info.</span>
+    <span class="muted">Text chat is filtered and moderated. Camera mode is 18+. Never share personal info.</span>
   </footer>
 
   <!-- MODALS -->
   <dialog id="rules-modal" class="modal">
     <h2>Rules &amp; safety</h2>
     <ul>
-      <li>You must be 13 or older to play.</li>
+      <li>You must be 13 or older to play. <b>Camera mode is 18+ only.</b></li>
+      <li>Camera mode: keep it clothed and clean. No nudity, no showing others without consent, no recording people.</li>
       <li>No harassment, hate speech, sexual content, or threats.</li>
       <li>Don't share personal info (address, phone, socials). Links and contact handles are removed automatically.</li>
       <li>Use <b>Report</b> if someone breaks the rules — reports include the chat transcript and are reviewed.</li>
@@ -205,6 +246,7 @@
       <label class="radio"><input type="radio" name="reason" value="harassment" checked> Harassment or bullying</label>
       <label class="radio"><input type="radio" name="reason" value="hate"> Hate speech</label>
       <label class="radio"><input type="radio" name="reason" value="sexual"> Sexual content</label>
+      <label class="radio"><input type="radio" name="reason" value="camera"> Inappropriate on camera</label>
       <label class="radio"><input type="radio" name="reason" value="underage"> Seems under 13</label>
       <label class="radio"><input type="radio" name="reason" value="spam"> Spam or scam</label>
       <div class="cta-row">

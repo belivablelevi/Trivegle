@@ -117,3 +117,65 @@ test('bad names are rejected', async (t) => {
   assert.match((await err).message, /not allowed/);
   s.close();
 });
+
+test('camera and text players use separate queues', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.close());
+  const cam = await client(srv.url, 'CamCat');
+  const txt = await client(srv.url, 'TextTom');
+
+  const camQueued = once(cam.socket, 'queued');
+  cam.socket.emit('queue', { mode: 'ranked', video: true });
+  assert.deepEqual(await camQueued, { position: 1, video: true });
+  const txtQueued = once(txt.socket, 'queued');
+  txt.socket.emit('queue', { mode: 'ranked' });
+  assert.deepEqual(await txtQueued, { position: 1, video: false });
+
+  cam.socket.close();
+  txt.socket.close();
+});
+
+test('camera matches relay WebRTC signaling only to the opponent; text matches do not', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.close());
+  const a = await client(srv.url, 'Vid1');
+  const b = await client(srv.url, 'Vid2');
+
+  const aFound = once(a.socket, 'matchFound');
+  const bFound = once(b.socket, 'matchFound');
+  a.socket.emit('queue', { mode: 'ranked', video: true });
+  b.socket.emit('queue', { mode: 'ranked', video: true });
+  const [ma, mb] = await Promise.all([aFound, bFound]);
+  assert.equal(ma.video, true);
+  assert.equal(mb.video, true);
+  assert.equal(ma.rtcInitiator !== mb.rtcInitiator, true, 'exactly one side creates the offer');
+
+  const offerer = ma.rtcInitiator ? a : b;
+  const answerer = ma.rtcInitiator ? b : a;
+  const got = once(answerer.socket, 'rtc');
+  offerer.socket.emit('rtc', { type: 'offer', data: { type: 'offer', sdp: 'v=0' } });
+  assert.deepEqual(await got, { type: 'offer', data: { type: 'offer', sdp: 'v=0' } });
+
+  // Unknown message types are dropped.
+  let leaked = false;
+  answerer.socket.on('rtc', (m) => { if (m.type === 'evil') leaked = true; });
+  offerer.socket.emit('rtc', { type: 'evil', data: {} });
+
+  // Text-mode matches never relay signaling.
+  const c = await client(srv.url, 'Txt1');
+  const d = await client(srv.url, 'Txt2');
+  const cFound = once(c.socket, 'matchFound');
+  c.socket.emit('queue', { mode: 'ranked' });
+  d.socket.emit('queue', { mode: 'ranked' });
+  const mc = await cFound;
+  assert.equal(mc.video, false);
+  assert.equal(mc.rtcInitiator, false);
+  let relayed = false;
+  d.socket.on('rtc', () => { relayed = true; });
+  c.socket.emit('rtc', { type: 'offer', data: {} });
+
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(leaked, false);
+  assert.equal(relayed, false);
+  for (const s of [a, b, c, d]) s.socket.close();
+});

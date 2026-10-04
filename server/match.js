@@ -27,11 +27,12 @@ function scoreAnswer({ correct, elapsedMs, questionMs, multiplier, basePoints, s
  * The match never talks to sockets directly, which keeps it testable.
  */
 class Match {
-  constructor({ players, ranked, config = {}, onEnd = () => ({}), rand = Math.random }) {
+  constructor({ players, ranked, video = false, config = {}, onEnd = () => ({}), rand = Math.random }) {
     if (players.length !== 2) throw new Error('A match needs exactly 2 players');
     this.id = crypto.randomUUID();
     this.players = players;
     this.ranked = ranked;
+    this.video = video; // camera mode: clients connect peer-to-peer via WebRTC
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.onEnd = onEnd;
     this.rand = rand;
@@ -75,6 +76,9 @@ class Match {
       p.send('matchFound', {
         matchId: this.id,
         ranked: this.ranked,
+        video: this.video,
+        // Exactly one side creates the WebRTC offer.
+        rtcInitiator: this.video && p === this.players[0],
         you: { name: p.name, rating: p.rating },
         opponent: { name: opp.name, rating: opp.rating, isBot: !!opp.isBot },
         categories: this.categories,

@@ -18,6 +18,7 @@ function createApp({
   matchConfig = {},
   botTimeScale = 1,
   ads = adsConfigFromEnv(),
+  iceServers = iceServersFromEnv(),
 } = {}) {
   const store = new PlayerStore(persist ? path.join(dataDir, 'players.json') : null);
   const reportsFile = persist ? path.join(dataDir, 'reports.jsonl') : null;
@@ -34,7 +35,7 @@ function createApp({
   app.disable('x-powered-by');
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.get('/api/leaderboard', (_req, res) => res.json(store.leaderboard(50)));
-  app.get('/api/config', (_req, res) => res.json({ ads, difficulties: Object.keys(DIFFICULTIES) }));
+  app.get('/api/config', (_req, res) => res.json({ ads, iceServers, difficulties: Object.keys(DIFFICULTIES) }));
   app.get('/api/health', (_req, res) => res.json({ ok: true, online: sessions.size }));
   app.get('/ads.txt', (_req, res) => {
     if (!ads.adsenseClient) return res.status(404).end();
@@ -101,11 +102,12 @@ function createApp({
     };
   }
 
-  function startMatch(sessionList, opponents, ranked) {
+  function startMatch(sessionList, opponents, ranked, video = false) {
     const participants = [...sessionList.map(participantFor), ...opponents];
     const match = new Match({
       players: participants,
       ranked,
+      video,
       config: matchConfig,
       onEnd: handleMatchEnd(sessionList),
     });
@@ -117,30 +119,37 @@ function createApp({
   }
 
   function tryMatchmake(session) {
+    // Camera and text players have separate queues: nobody gets put on camera unexpectedly.
     const opponent = queue.find(
-      (other) => other !== session && other.player.id !== session.player.id && !isBlocked(session, other),
+      (other) =>
+        other !== session &&
+        other.video === session.video &&
+        other.player.id !== session.player.id &&
+        !isBlocked(session, other),
     );
     if (!opponent) {
       if (!queue.includes(session)) queue.push(session);
-      session.socket.emit('queued', { position: queue.indexOf(session) + 1 });
+      const sameMode = queue.filter((s) => s.video === session.video);
+      session.socket.emit('queued', { position: sameMode.indexOf(session) + 1, video: session.video });
       return;
     }
     removeFromQueue(opponent);
     removeFromQueue(session);
-    startMatch([opponent, session], [], true);
+    startMatch([opponent, session], [], true, session.video);
   }
 
   function broadcastStats() {
     let inMatch = 0;
     for (const s of sessions.values()) if (s.match && s.match.phase !== 'ended') inMatch += 1;
-    io.emit('stats', { online: sessions.size, searching: queue.length, inMatch });
+    const searchingCamera = queue.filter((s) => s.video).length;
+    io.emit('stats', { online: sessions.size, searching: queue.length - searchingCamera, searchingCamera, inMatch });
   }
   const statsTimer = setInterval(broadcastStats, 5000);
   statsTimer.unref();
 
   // ---------- Sockets ----------
   io.on('connection', (socket) => {
-    const session = { socket, player: null, match: null, lastMatch: null };
+    const session = { socket, player: null, match: null, lastMatch: null, video: false };
     sessions.set(socket.id, session);
 
     socket.on('hello', ({ token, name } = {}) => {
@@ -155,10 +164,11 @@ function createApp({
       broadcastStats();
     });
 
-    socket.on('queue', ({ mode = 'ranked', difficulty = 'medium' } = {}) => {
+    socket.on('queue', ({ mode = 'ranked', difficulty = 'medium', video = false } = {}) => {
       if (!session.player) return;
       leaveMatch(session);
       removeFromQueue(session);
+      session.video = video === true;
       if (mode === 'practice') {
         const bot = createBot({ difficulty, timeScale: botTimeScale });
         startMatch([session], [bot], false);
@@ -175,6 +185,16 @@ function createApp({
 
     socket.on('answer', ({ qIndex, choice } = {}) => {
       session.match?.answer(session.player.id, qIndex, choice);
+    });
+
+    // WebRTC signaling relay (offer / answer / ICE candidates). Video itself flows
+    // peer-to-peer and never touches this server.
+    socket.on('rtc', (msg) => {
+      const m = session.match;
+      if (!m || !m.video || m.closed || !session.player) return;
+      if (!msg || !['offer', 'answer', 'ice'].includes(msg.type)) return;
+      if (JSON.stringify(msg).length > 16000) return;
+      m.opponentOf(session.player.id).send('rtc', { type: msg.type, data: msg.data });
     });
 
     socket.on('ready', () => {
@@ -268,4 +288,13 @@ function adsConfigFromEnv(env = process.env) {
   };
 }
 
-module.exports = { createApp, adsConfigFromEnv };
+function iceServersFromEnv(env = process.env) {
+  const servers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  // A TURN server is needed for players behind strict NATs (roughly 10–20% of connections).
+  if (env.TURN_URL) {
+    servers.push({ urls: env.TURN_URL, username: env.TURN_USERNAME, credential: env.TURN_CREDENTIAL });
+  }
+  return servers;
+}
+
+module.exports = { createApp, adsConfigFromEnv, iceServersFromEnv };

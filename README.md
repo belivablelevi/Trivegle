@@ -10,8 +10,13 @@ Trivegle is a trivia practice app that works like Omegle and OMOGLE. You get mat
 - **Multi-round battles:** 3 rounds × 3 questions across 8 categories. Faster answers earn bonus points, and **the final round is worth double**.
 - **Chat break between rounds** with a random conversation topic ("Pineapple on pizza: yes or no?"). Chat stays open after the match so players can say GG.
 - **Elo leaderboard:** wins, losses, draws, best streak and accuracy. Beating higher-rated players is worth more. Leaving mid-match counts as a forfeit.
+- **Text mode or Camera mode.** Text mode (the default, 13+) is chat only. Camera mode (18+, opt-in) adds face-to-face video during the battle:
+  - Camera players are only matched with other camera players.
+  - Video goes directly between the two players (WebRTC); it never passes through or gets stored on the server.
+  - The stranger's video starts **blurred** until you tap Reveal, and your mic starts muted.
+  - You can turn your camera off, mute, or hide the stranger at any time. Reporting or blocking cuts the video instantly.
 - **Practice mode** against an Easy, Medium or Hard bot. It's unranked and always labelled as a bot.
-- **Safety:** 13+ age gate, profanity filter, link and contact-handle stripping, chat rate limiting, report (saves the chat transcript) and block (you're never matched with that player again). Chat is text only.
+- **Safety:** 13+ age gate, profanity filter, link and contact-handle stripping, chat rate limiting, report (saves the chat transcript) and block (you're never matched with that player again).
 - **Monetization built in:** configurable ad slots (landing, queue, results; never during questions), an auto-generated `ads.txt`, a "Trivegle+" upsell, and an "Advertise with us" page.
 
 ## Run it
@@ -23,7 +28,7 @@ npm run dev          # same, restarts on file changes
 npm test             # unit + match engine + end-to-end socket tests
 ```
 
-Open two browser windows (or one normal and one private) to play against yourself.
+Open two browser windows (or one normal and one private) to play against yourself. Camera mode needs `localhost` or HTTPS, because browsers only allow camera access on secure pages.
 
 ## Configuration
 
@@ -32,6 +37,7 @@ Open two browser windows (or one normal and one private) to play against yoursel
 | `PORT` | HTTP port (default `3000`) |
 | `ADSENSE_CLIENT` | e.g. `ca-pub-1234567890123456`. Turns on Google AdSense and `/ads.txt` |
 | `ADSENSE_SLOT_LANDING` / `ADSENSE_SLOT_QUEUE` / `ADSENSE_SLOT_RESULTS` | AdSense slot IDs for each placement |
+| `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` | Optional TURN server for camera mode. Without one, video fails for players on some strict networks (school, office, some mobile carriers); chat and the game still work |
 
 Without AdSense settings, each slot shows a house ad that opens the "Advertise" modal.
 
@@ -63,6 +69,7 @@ Add entries to `BANK` in `server/questions.js` as `[question, correct, wrong1, w
 ## Before going to production
 
 - Swap the JSON store for Postgres or Redis if you run more than one server process (and use the Socket.IO Redis adapter).
+- **Camera mode:** add a TURN server (e.g. Twilio, Cloudflare or self-hosted coturn) and an automated video-moderation provider before promoting camera mode widely. The 18+ checkbox is self-declared; consider real age verification.
 - Add a moderation API and a review workflow for `data/reports.jsonl`.
 - Add a privacy policy, terms of service and a consent banner (required by AdSense in the EU/UK). See `docs/MONETIZATION.md`.
 - Put it behind HTTPS (e.g. Render, Railway or Fly.io; they all run `npm start` as-is).

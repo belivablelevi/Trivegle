@@ -63,4 +63,9 @@ Sponsorships (sections 1.3 and 1.4) usually pay a flat fee, roughly $500–$5,00
 - **EU/UK consent:** AdSense requires a Google-certified consent management platform (CMP) for EEA/UK visitors. Turn on Google's built-in "Privacy & messaging" CMP or a third-party one.
 - **Privacy policy and terms:** required by AdSense and by Stripe. List what's stored: nickname, rating, a hashed login token, and chat transcripts attached to reports.
 - **Moderation:** advertisers won't buy on an unmoderated chat site. That's a big part of why the original Omegle shut down. What's built: profanity filter, link and contact-handle stripping, rate limiting, report with transcript, block. Before scaling, add a moderation API (e.g. OpenAI or Perspective) and a human review queue for `data/reports.jsonl`.
-- **No video or voice chat** without a dedicated trust & safety plan. Text-only is a deliberate choice for safety and for advertisers.
+- **Camera mode is 18+ and opt-in.** It's the riskiest feature on the site, so:
+  - **Run ads in text mode first.** Advertisers are far more cautious about live video next to their brand. Treat camera-mode inventory as a separate, lower-priority bucket until moderation is proven.
+  - **Add automated video moderation** (e.g. Hive, Sightengine or AWS Rekognition sampling frames) before promoting camera mode. Video is peer-to-peer, so the client would have to send occasional snapshots for checking.
+  - **Consider real age verification** for camera mode. The checkbox is self-declared. Some regions (e.g. the UK Online Safety Act) expect more for live video with strangers.
+  - **Budget for a TURN relay:** about $0.40–$0.80 per GB relayed through a hosted provider. Only the ~10–20% of connections that can't go direct use it.
+- **Trivegle+ perk idea:** a "camera filters & backgrounds" pack. It's cosmetic, and it makes camera mode more comfortable for camera-shy players.

@@ -54,6 +54,7 @@
   // ---------- Screens ----------
   function show(name) {
     $$('.screen').forEach((s) => s.classList.toggle('active', s.id === `screen-${name}`));
+    if (name === 'home' || name === 'leaderboard') stopLocalStream(); // camera light off outside battles
     if (name === 'home') refreshLeaderboard();
     if (name === 'leaderboard') refreshLeaderboard(true);
     window.scrollTo({ top: 0 });
@@ -134,9 +135,28 @@
   nameInput.value = storage.get('trivegle.name') || '';
   agreeInput.checked = storage.get('trivegle.agreed') === '1';
 
-  function startQueue(mode) {
+  // Text vs camera mode
+  const adultInput = $('#adult-input');
+  const wantsCamera = () => $('input[name=mode]:checked').value === 'camera';
+  function syncModeUi() {
+    $('#camera-note').hidden = !wantsCamera();
+    $('#adult-row').hidden = !wantsCamera();
+  }
+  if (storage.get('trivegle.mode') === 'camera') $('input[name=mode][value=camera]').checked = true;
+  adultInput.checked = storage.get('trivegle.adult') === '1';
+  $$('input[name=mode]').forEach((r) => r.addEventListener('change', () => {
+    storage.set('trivegle.mode', wantsCamera() ? 'camera' : 'text');
+    syncModeUi();
+  }));
+  syncModeUi();
+
+  async function startQueue(mode) {
     const err = $('#name-error');
     err.hidden = true;
+    const fail = (msg) => {
+      err.textContent = msg;
+      err.hidden = false;
+    };
     if (!agreeInput.checked) {
       err.textContent = 'Please confirm you\'re 13+ and agree to the rules.';
       err.hidden = false;
@@ -149,9 +169,19 @@
       nameInput.focus();
       return;
     }
+    const video = mode === 'ranked' && wantsCamera(); // bots don't have cameras
+    if (video) {
+      if (!adultInput.checked) return fail('Camera mode is 18+. Confirm your age or switch to Text mode.');
+      try {
+        await ensureLocalStream();
+      } catch {
+        return fail('Couldn\'t access your camera. Allow camera access in your browser, or switch to Text mode.');
+      }
+      storage.set('trivegle.adult', '1');
+    }
     storage.set('trivegle.name', name);
     storage.set('trivegle.agreed', '1');
-    state.pendingQueue = { mode, difficulty: $('#difficulty').value };
+    state.pendingQueue = { mode, video, difficulty: $('#difficulty').value };
     socket.emit('hello', { token: state.token, name });
   }
 
@@ -251,7 +281,157 @@
   });
 
   // ---------- Match actions ----------
+  // ---------- Camera mode (WebRTC) ----------
+  // The server only relays connection messages; audio/video flows directly between the two players.
+  const rtc = { pc: null, local: null, pendingIce: [], status: 'idle', revealed: false, hidden: false };
+  const remoteTile = $('#remote-video').closest('.video-tile');
+  const localTile = $('#local-video').closest('.video-tile');
+
+  async function ensureLocalStream() {
+    if (rtc.local) return rtc.local;
+    rtc.local = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+    rtc.local.getAudioTracks().forEach((t) => { t.enabled = false; }); // mic starts muted
+    $('#local-video').srcObject = rtc.local;
+    renderControls();
+    return rtc.local;
+  }
+
+  function stopLocalStream() {
+    closePeer();
+    rtc.local?.getTracks().forEach((t) => t.stop());
+    rtc.local = null;
+    $('#local-video').srcObject = null;
+  }
+
+  function renderRemote() {
+    const connected = rtc.status === 'connected';
+    remoteTile.classList.toggle('blurred', !rtc.revealed);
+    remoteTile.classList.toggle('cam-off', rtc.hidden || !connected);
+    const cover = $('#remote-cover');
+    const text = {
+      connecting: 'Connecting camera…',
+      failed: 'Video couldn\'t connect. Chat still works.',
+      left: 'Stranger left.',
+      closed: 'Video off.',
+    }[rtc.status];
+    if (rtc.hidden && connected) {
+      $('#remote-status').textContent = 'Stranger\'s video hidden.';
+    } else {
+      $('#remote-status').textContent = connected ? (rtc.revealed ? '' : 'Video is blurred for your safety.') : text || '';
+    }
+    $('#reveal-btn').hidden = !(connected && !rtc.revealed && !rtc.hidden);
+    cover.hidden = connected && rtc.revealed && !rtc.hidden;
+  }
+
+  function renderControls() {
+    const cam = rtc.local?.getVideoTracks()[0];
+    const mic = rtc.local?.getAudioTracks()[0];
+    const camOn = !!cam?.enabled;
+    const micOn = !!mic?.enabled;
+    $('#cam-btn').classList.toggle('off', !camOn);
+    $('#cam-btn').title = camOn ? 'Turn camera off' : 'Turn camera on';
+    localTile.classList.toggle('cam-off', !camOn);
+    $('#mic-btn').classList.toggle('off', !micOn);
+    $('#mic-btn').textContent = micOn ? '🎙️' : '🔇';
+    $('#mic-btn').title = micOn ? 'Mute mic' : 'Unmute mic';
+    $('#hide-btn').classList.toggle('off', rtc.hidden);
+    $('#hide-btn').title = rtc.hidden ? 'Show stranger\'s video' : 'Hide stranger\'s video';
+  }
+
+  function setRemoteStatus(status) {
+    rtc.status = status;
+    renderRemote();
+  }
+
+  function closePeer(status = 'closed') {
+    if (rtc.pc) {
+      rtc.pc.onicecandidate = rtc.pc.ontrack = rtc.pc.onconnectionstatechange = null;
+      rtc.pc.close();
+      rtc.pc = null;
+    }
+    $('#remote-video').srcObject = null;
+    rtc.pendingIce = [];
+    setRemoteStatus(status);
+  }
+
+  function setupPeer(initiator) {
+    closePeer();
+    rtc.revealed = false;
+    rtc.hidden = false;
+    $('#remote-video').muted = false;
+    const pc = new RTCPeerConnection({ iceServers: state.config.iceServers || [{ urls: 'stun:stun.l.google.com:19302' }] });
+    rtc.pc = pc;
+    rtc.local?.getTracks().forEach((t) => pc.addTrack(t, rtc.local));
+    pc.onicecandidate = (e) => { if (e.candidate) socket.emit('rtc', { type: 'ice', data: e.candidate.toJSON() }); };
+    pc.ontrack = (e) => {
+      $('#remote-video').srcObject = e.streams[0];
+      setRemoteStatus('connected');
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') setRemoteStatus('failed');
+    };
+    setRemoteStatus('connecting');
+    renderControls();
+    if (initiator) {
+      pc.createOffer()
+        .then((offer) => pc.setLocalDescription(offer))
+        .then(() => socket.emit('rtc', { type: 'offer', data: pc.localDescription.toJSON() }))
+        .catch(() => setRemoteStatus('failed'));
+    }
+  }
+
+  async function flushIce() {
+    const pending = rtc.pendingIce.splice(0);
+    for (const c of pending) await rtc.pc?.addIceCandidate(c).catch(() => {});
+  }
+
+  socket.on('rtc', async ({ type, data }) => {
+    const pc = rtc.pc;
+    if (!pc) return;
+    try {
+      if (type === 'offer') {
+        await pc.setRemoteDescription(data);
+        await flushIce();
+        await pc.setLocalDescription(await pc.createAnswer());
+        socket.emit('rtc', { type: 'answer', data: pc.localDescription.toJSON() });
+      } else if (type === 'answer') {
+        await pc.setRemoteDescription(data);
+        await flushIce();
+      } else if (type === 'ice') {
+        if (pc.remoteDescription) await pc.addIceCandidate(data);
+        else rtc.pendingIce.push(data);
+      }
+    } catch {
+      setRemoteStatus('failed');
+    }
+  });
+
+  $('#reveal-btn').addEventListener('click', () => {
+    rtc.revealed = true;
+    renderRemote();
+  });
+  $('#cam-btn').addEventListener('click', () => {
+    const t = rtc.local?.getVideoTracks()[0];
+    if (t) t.enabled = !t.enabled;
+    renderControls();
+  });
+  $('#mic-btn').addEventListener('click', () => {
+    const t = rtc.local?.getAudioTracks()[0];
+    if (t) t.enabled = !t.enabled;
+    renderControls();
+  });
+  $('#hide-btn').addEventListener('click', () => {
+    rtc.hidden = !rtc.hidden;
+    $('#remote-video').muted = rtc.hidden; // hiding also silences them
+    renderRemote();
+    renderControls();
+  });
+
   function leaveMatch() {
+    closePeer();
     if (state.match) socket.emit('leaveMatch');
     state.match = null;
     state.question = null;
@@ -262,7 +442,7 @@
     if (state.match && !state.match.ended && !confirm('Skip this stranger? Leaving mid-match counts as a loss.')) return;
     const mode = state.match?.ranked === false ? 'practice' : 'ranked';
     leaveMatch();
-    socket.emit('queue', { mode, difficulty: $('#difficulty').value });
+    socket.emit('queue', { mode, video: mode === 'ranked' && !!rtc.local && wantsCamera(), difficulty: $('#difficulty').value });
   });
   $('#home-btn').addEventListener('click', () => {
     if (state.match && !state.match.ended && !confirm('Leave this match? It counts as a loss.')) return;
@@ -281,7 +461,10 @@
 
   $('#block-btn').addEventListener('click', () => {
     if (state.match?.opponent.isBot) return addChat('system', 'You can\'t block a bot. 🤖');
-    if (confirm('Block this player? You won\'t be matched again.')) socket.emit('block');
+    if (confirm('Block this player? You won\'t be matched again.')) {
+      socket.emit('block');
+      closePeer();
+    }
   });
   $('#report-btn').addEventListener('click', () => {
     if (state.match?.opponent.isBot) return addChat('system', 'Bots can\'t be reported. 🤖');
@@ -291,6 +474,7 @@
     if ($('#report-modal').returnValue !== 'submit') return;
     const reason = new FormData($('#report-form')).get('reason');
     socket.emit('report', { reason });
+    closePeer(); // stop seeing/hearing them immediately
   });
 
   // ---------- Socket events ----------
@@ -327,8 +511,11 @@
 
   socket.on('matchFound', (m) => {
     exitQueue();
-    state.match = { opponent: m.opponent, ranked: m.ranked, ended: false };
+    state.match = { opponent: m.opponent, ranked: m.ranked, video: m.video, ended: false };
     show('match');
+    $('#video-row').hidden = !m.video;
+    if (m.video) setupPeer(m.rtcInitiator);
+    else closePeer();
     $('#chat-log').replaceChildren();
     $('#you-name').textContent = `${m.you.name} (${m.you.rating})`;
     $('#opp-name').textContent = `${m.opponent.name} (${m.opponent.rating})`;
@@ -338,7 +525,7 @@
     setScores({ you: 0, opp: 0 });
     addChat('system', m.opponent.isBot
       ? `Practice match vs ${m.opponent.name}. Not ranked.`
-      : `You're now battling a random stranger: ${m.opponent.name}. Say hi!`);
+      : `You're now battling a random stranger${m.video ? ' on camera' : ''}: ${m.opponent.name}. Say hi!`);
     splash(m.ranked ? 'Ranked battle' : 'Practice', `vs ${m.opponent.name}`, `Categories: ${m.categories.join(' · ')}`);
   });
 
@@ -451,11 +638,13 @@
 
   socket.on('opponentLeft', () => {
     addChat('system', `${state.match?.opponent.isBot ? 'The bot' : 'Stranger'} has disconnected.`);
+    if (state.match?.video) closePeer('left');
   });
 
   socket.on('disconnect', () => {
     if (state.match && !state.match.ended) addChat('system', 'Connection lost. Reconnecting…');
     state.match = null;
+    closePeer();
   });
 
   // ---------- Boot ----------
