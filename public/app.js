@@ -38,7 +38,7 @@
 
   // ---------- State ----------
   const state = {
-    token: storage.get('trivegle.token'),
+    signedIn: false,
     profile: null,
     config: { ads: {} },
     pendingQueue: null,
@@ -55,6 +55,7 @@
   function show(name) {
     $$('.screen').forEach((s) => s.classList.toggle('active', s.id === `screen-${name}`));
     if (name === 'home' || name === 'leaderboard') stopLocalStream(); // camera light off outside battles
+    if (name !== 'match') document.body.classList.remove('camera-match');
     if (name === 'home') refreshLeaderboard();
     if (name === 'leaderboard') refreshLeaderboard(true);
     window.scrollTo({ top: 0 });
@@ -132,7 +133,6 @@
   // ---------- Home actions ----------
   const nameInput = $('#name-input');
   const agreeInput = $('#agree-input');
-  nameInput.value = storage.get('trivegle.name') || '';
   agreeInput.checked = storage.get('trivegle.agreed') === '1';
 
   // Text vs camera mode
@@ -179,10 +179,9 @@
       }
       storage.set('trivegle.adult', '1');
     }
-    storage.set('trivegle.name', name);
     storage.set('trivegle.agreed', '1');
     state.pendingQueue = { mode, video, difficulty: $('#difficulty').value };
-    socket.emit('hello', { token: state.token, name });
+    socket.emit('hello', { name });
   }
 
   $('#play-ranked').addEventListener('click', () => startQueue('ranked'));
@@ -479,13 +478,19 @@
 
   // ---------- Socket events ----------
   socket.on('connect', () => {
-    socket.emit('hello', { token: state.token, name: storage.get('trivegle.name') || undefined });
+    if (state.signedIn) socket.emit('hello', {});
   });
 
-  socket.on('welcome', ({ token, profile }) => {
-    state.token = token;
-    storage.set('trivegle.token', token);
+  socket.on('authRequired', () => {
+    state.pendingQueue = null;
+    renderAuth({ player: null, providers: state.providers || [], devLogin: state.devLogin });
+    show('home');
+  });
+
+  socket.on('welcome', ({ profile, needsName }) => {
     renderProfile(profile);
+    $('#account-name').textContent = profile.name;
+    if (!needsName && !nameInput.value) nameInput.value = profile.name;
     if (state.pendingQueue) {
       socket.emit('queue', state.pendingQueue);
       state.pendingQueue = null;
@@ -514,6 +519,8 @@
     state.match = { opponent: m.opponent, ranked: m.ranked, video: m.video, ended: false };
     show('match');
     $('#video-row').hidden = !m.video;
+    $('.match-grid').classList.toggle('camera', !!m.video);
+    document.body.classList.toggle('camera-match', !!m.video);
     if (m.video) setupPeer(m.rtcInitiator);
     else closePeer();
     $('#chat-log').replaceChildren();
@@ -646,6 +653,65 @@
     state.match = null;
     closePeer();
   });
+
+  // ---------- Sign in ----------
+  const PROVIDER_ICONS = {
+    google: '<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.2 5.6c4.2-3.9 7.1-9.6 7.1-17z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.2-5.6c-2.2 1.5-5.1 2.4-8.7 2.4-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>',
+    facebook: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M24 12a12 12 0 1 0-13.9 11.9v-8.4H7.1V12h3V9.4c0-3 1.8-4.7 4.5-4.7 1.3 0 2.7.2 2.7.2v3h-1.5c-1.5 0-2 .9-2 1.9V12h3.4l-.5 3.5h-2.9v8.4A12 12 0 0 0 24 12z"/></svg>',
+    discord: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.6 1.3a18.3 18.3 0 0 0-5.5 0L8.6 3a19.7 19.7 0 0 0-4.9 1.5C.6 9 -.3 13.5.1 18a19.9 19.9 0 0 0 6 3l1.3-2.1a12.9 12.9 0 0 1-2-1l.5-.4a14.2 14.2 0 0 0 12.2 0l.5.4c-.6.4-1.3.7-2 1L18 21a19.8 19.8 0 0 0 6-3c.5-5.2-.9-9.7-3.7-13.6zM8 15.3c-1.2 0-2.2-1.1-2.2-2.4S6.8 10.5 8 10.5s2.2 1.1 2.2 2.4-1 2.4-2.2 2.4zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4z"/></svg>',
+  };
+
+  function renderAuth(me) {
+    state.signedIn = !!me.player;
+    state.providers = me.providers;
+    state.devLogin = me.devLogin;
+    $('#signin-panel').hidden = state.signedIn;
+    $('#play-panel').hidden = !state.signedIn;
+    $('#account').hidden = !state.signedIn;
+    $('#profile-card').hidden = !state.signedIn;
+    if (state.signedIn) {
+      $('#account-name').textContent = me.player.name;
+      if (!me.player.needsName) nameInput.value = me.player.name;
+      else nameInput.placeholder = 'Pick a nickname (not your real name)';
+      return;
+    }
+    const buttons = me.providers.map(({ key, label }) => {
+      const a = el('a', { class: `signin-btn ${key}`, href: `/auth/${key}` });
+      a.insertAdjacentHTML('afterbegin', PROVIDER_ICONS[key] || ''); // static, trusted SVG
+      a.append(`Continue with ${label}`);
+      return a;
+    });
+    if (me.devLogin) {
+      buttons.push(el('button', { class: 'signin-btn dev', onclick: () => {
+        const name = prompt('Dev sign-in: pick a nickname');
+        if (name) location.href = `/auth/dev?name=${encodeURIComponent(name)}`;
+      } }, '🛠 Dev sign-in (local only)'));
+    }
+    $('#signin-buttons').replaceChildren(...buttons);
+    $('#signin-empty').hidden = buttons.length > 0;
+  }
+
+  $('#signout-btn').addEventListener('click', async () => {
+    leaveMatch();
+    await fetch('/auth/logout', { method: 'POST' }).catch(() => {});
+    location.href = '/';
+  });
+
+  const authError = new URLSearchParams(location.search).get('auth_error');
+  if (authError) {
+    const msg = {
+      banned: 'This account has been banned for breaking the rules.',
+      state: 'Sign-in expired. Please try again.',
+    }[authError] || 'Sign-in failed. Please try again.';
+    $('#signin-error').textContent = msg;
+    $('#signin-error').hidden = false;
+    history.replaceState(null, '', '/');
+  }
+
+  fetch('/api/me').then((r) => r.json()).then((me) => {
+    renderAuth(me);
+    if (state.signedIn && socket.connected) socket.emit('hello', {});
+  }).catch(() => renderAuth({ player: null, providers: [], devLogin: false }));
 
   // ---------- Boot ----------
   fetch('/api/config').then((r) => r.json()).then((cfg) => {

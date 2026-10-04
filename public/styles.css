@@ -234,10 +234,16 @@ main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; padding: 24px 16
 .mode-note { font-size: 13px; margin: 8px 0 0; }
 
 /* ---------- Video ---------- */
-.video-row { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-top: 16px; }
+/* Omegle-style: two equal-sized cameras stacked on the left (stranger on top, you below),
+   game in the middle, chat on the right. */
+body.camera-match main { max-width: 1480px; }
+.match-grid.camera { grid-template-columns: minmax(280px, 400px) minmax(0, 1fr) 300px; }
+.match-grid.camera .stage { min-height: 0; }
+.video-row { display: flex; flex-direction: column; gap: 12px; }
 .video-row[hidden] { display: none; }
+.video-row .video-tile { flex: 1; }
 .video-tile {
-  position: relative; aspect-ratio: 16 / 9; border-radius: var(--radius); overflow: hidden;
+  position: relative; aspect-ratio: 4 / 3; border-radius: var(--radius); overflow: hidden;
   background: #05060c; border: 1px solid var(--line);
 }
 .video-tile.opp { border-color: rgba(255, 107, 154, .5); }
@@ -262,7 +268,36 @@ main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; padding: 24px 16
 .icon-btn.off { background: var(--bad); border-color: var(--bad); }
 .video-tile.cam-off video { visibility: hidden; }
 
+@media (max-width: 1180px) {
+  .match-grid.camera { grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); }
+  .match-grid.camera .chat { grid-column: 1 / -1; height: 380px; min-height: 0; }
+}
+@media (max-width: 860px) {
+  .match-grid.camera { grid-template-columns: 1fr; }
+  .video-row { flex-direction: row; } /* still equal sizes, side by side */
+}
 @media (max-width: 520px) {
   .mode-picker { grid-template-columns: 1fr; }
-  .video-row { grid-template-columns: 3fr 2fr; }
+  .video-cover { font-size: 12px; gap: 6px; padding: 6px; }
+  .video-cover .btn { padding: 4px 8px; font-size: 12px; }
+  .video-controls { gap: 4px; bottom: 4px; }
+  .icon-btn { width: 30px; height: 30px; font-size: 14px; }
 }
+
+/* ---------- Sign in ---------- */
+.signin-panel { margin-top: 20px; }
+.signin-panel h3 { margin: 0 0 6px; }
+.signin-buttons { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; max-width: 360px; }
+.signin-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 16px; border-radius: 12px;
+  font-weight: 700; font-size: 16px; text-decoration: none; border: 1px solid transparent; transition: filter .15s;
+}
+.signin-btn:hover { filter: brightness(1.08); }
+.signin-btn svg { width: 20px; height: 20px; flex: none; }
+.signin-btn.google { background: #fff; color: #1f1f1f; border-color: #dadce0; }
+.signin-btn.facebook { background: #1877f2; color: #fff; }
+.signin-btn.discord { background: #5865f2; color: #fff; }
+.signin-btn.dev { background: transparent; color: var(--text); border: 1px dashed var(--line); }
+.small-print { font-size: 13px; }
+.account { display: flex; align-items: center; gap: 8px; padding-left: 12px; border-left: 1px solid var(--line); }
+.account[hidden] { display: none; }

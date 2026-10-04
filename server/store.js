@@ -6,10 +6,6 @@ const crypto = require('crypto');
 
 const STARTING_RATING = 1000;
 
-function hashToken(token) {
-  return crypto.createHash('sha256').update(token).digest('hex');
-}
-
 /**
  * Tiny JSON-file player store. Good enough for a single server; swap for
  * Postgres/Redis when you scale past one process.
@@ -18,7 +14,7 @@ class PlayerStore {
   constructor(file) {
     this.file = file;
     this.players = new Map(); // id -> player
-    this.byTokenHash = new Map(); // tokenHash -> id
+    this.byAccount = new Map(); // "provider:providerId" -> player id
     this.saveTimer = null;
     this.load();
   }
@@ -28,7 +24,7 @@ class PlayerStore {
     const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
     for (const p of data.players || []) {
       this.players.set(p.id, p);
-      this.byTokenHash.set(p.tokenHash, p.id);
+      for (const acct of p.accounts || []) this.byAccount.set(acct, p.id);
     }
   }
 
@@ -49,24 +45,19 @@ class PlayerStore {
     fs.renameSync(tmp, this.file);
   }
 
-  /** Find the player for a token, or create a new one. Returns { player, token }. */
-  login(token, name) {
-    if (typeof token === 'string' && token.length >= 32) {
-      const id = this.byTokenHash.get(hashToken(token));
-      const player = id && this.players.get(id);
-      if (player) {
-        if (name && name !== player.name) {
-          player.name = name;
-          this.scheduleSave();
-        }
-        return { player, token };
-      }
-    }
-    const newToken = crypto.randomBytes(24).toString('hex');
+  /**
+   * Find the player linked to a sign-in account (e.g. "google" + Google user id), or create one.
+   * New OAuth players get a placeholder name and are asked to pick a nickname.
+   */
+  findOrCreateByAccount(provider, providerId, nickname = null) {
+    const key = `${provider}:${providerId}`;
+    const existing = this.players.get(this.byAccount.get(key));
+    if (existing) return existing;
     const player = {
       id: crypto.randomUUID(),
-      tokenHash: hashToken(newToken),
-      name: name || `Player${Math.floor(1000 + Math.random() * 9000)}`,
+      accounts: [key],
+      name: nickname || `Player${Math.floor(1000 + Math.random() * 9000)}`,
+      needsName: !nickname,
       rating: STARTING_RATING,
       wins: 0,
       losses: 0,
@@ -79,9 +70,29 @@ class PlayerStore {
       createdAt: Date.now(),
     };
     this.players.set(player.id, player);
-    this.byTokenHash.set(player.tokenHash, player.id);
+    this.byAccount.set(key, player.id);
     this.scheduleSave();
-    return { player, token: newToken };
+    return player;
+  }
+
+  /** Nicknames are unique (case-insensitive) so the leaderboard can't be impersonated. */
+  isNameTaken(name, exceptId = null) {
+    const lower = name.toLowerCase();
+    for (const p of this.players.values()) {
+      if (p.id !== exceptId && !p.needsName && p.name.toLowerCase() === lower) return true;
+    }
+    return false;
+  }
+
+  rename(id, name) {
+    const p = this.players.get(id);
+    if (!p || !name) return p;
+    if (p.name !== name || p.needsName) {
+      p.name = name;
+      p.needsName = false;
+      this.scheduleSave();
+    }
+    return p;
   }
 
   get(id) {

@@ -13,17 +13,25 @@ function once(socket, event) {
 }
 
 async function startServer(opts = {}) {
-  const server = createApp({ persist: false, matchConfig: FAST, botTimeScale: 0.01, ...opts });
+  const server = createApp({
+    persist: false, matchConfig: FAST, botTimeScale: 0.01, devLogin: true, providers: {}, sessionSecret: 'test-secret', ...opts,
+  });
   await new Promise((r) => server.httpServer.listen(0, r));
   const url = `http://localhost:${server.httpServer.address().port}`;
   return { ...server, url };
 }
 
+async function signIn(url, name) {
+  const res = await fetch(`${url}/auth/dev?name=${encodeURIComponent(name)}`, { redirect: 'manual' });
+  return res.headers.get('set-cookie').split(';')[0];
+}
+
 async function client(url, name) {
-  const s = connect(url, { transports: ['websocket'], forceNew: true });
+  const cookie = await signIn(url, name);
+  const s = connect(url, { transports: ['websocket'], forceNew: true, extraHeaders: { cookie } });
   const welcome = once(s, 'welcome');
   s.emit('hello', { name });
-  return { socket: s, welcome: await welcome };
+  return { socket: s, cookie, welcome: await welcome };
 }
 
 test('two strangers get matched, play, chat, and the winner gains rating', async (t) => {
@@ -108,14 +116,67 @@ test('practice vs bot is unranked and completes', async (t) => {
   p.socket.close();
 });
 
-test('bad names are rejected', async (t) => {
+test('bad nicknames are rejected', async (t) => {
   const srv = await startServer();
   t.after(() => srv.close());
-  const s = connect(srv.url, { transports: ['websocket'], forceNew: true });
-  const err = once(s, 'errorMsg');
-  s.emit('hello', { name: 'fuckface' });
+  const { socket } = await client(srv.url, 'Polite');
+  const err = once(socket, 'errorMsg');
+  socket.emit('hello', { name: 'fuckface' });
   assert.match((await err).message, /not allowed/);
-  s.close();
+  socket.close();
+});
+
+test('playing requires sign-in; forged cookies are rejected', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.close());
+  for (const cookie of [undefined, 'trivegle_session=someid|9999999999999.forgedsig']) {
+    const s = connect(srv.url, { transports: ['websocket'], forceNew: true, extraHeaders: cookie ? { cookie } : {} });
+    const required = once(s, 'authRequired');
+    s.emit('hello', { name: 'Sneaky' });
+    await required;
+    const again = once(s, 'authRequired');
+    s.emit('queue', { mode: 'practice' });
+    await again;
+    s.close();
+  }
+  const me = await (await fetch(`${srv.url}/api/me`)).json();
+  assert.equal(me.player, null);
+  assert.equal(me.devLogin, true);
+});
+
+test('sign-in persists the same player across connections and /api/me reports it', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.close());
+  const first = await client(srv.url, 'Repeat');
+  const second = await client(srv.url, 'Repeat');
+  assert.equal(srv.store.players.size, 1);
+  const me = await (await fetch(`${srv.url}/api/me`, { headers: { cookie: first.cookie } })).json();
+  assert.equal(me.player.name, 'Repeat');
+  const out = await fetch(`${srv.url}/auth/logout`, { method: 'POST' });
+  assert.match(out.headers.get('set-cookie'), /Max-Age=0/);
+  first.socket.close();
+  second.socket.close();
+});
+
+test('OAuth providers redirect with a state check and reject tampered callbacks', async (t) => {
+  const srv = await startServer({
+    devLogin: false,
+    providers: { google: { ...require('../server/auth').PROVIDERS.google, clientId: 'cid', clientSecret: 'sec' } },
+  });
+  t.after(() => srv.close());
+  const start = await fetch(`${srv.url}/auth/google`, { redirect: 'manual' });
+  const loc = new URL(start.headers.get('location'));
+  assert.equal(loc.origin, 'https://accounts.google.com');
+  assert.equal(loc.searchParams.get('client_id'), 'cid');
+  assert.equal(loc.searchParams.get('redirect_uri'), `${srv.url}/auth/google/callback`);
+  assert.ok(loc.searchParams.get('state'));
+
+  const bad = await fetch(`${srv.url}/auth/google/callback?code=x&state=wrong`, {
+    redirect: 'manual',
+    headers: { cookie: start.headers.get('set-cookie').split(';')[0] },
+  });
+  assert.equal(bad.headers.get('location'), '/?auth_error=state');
+  assert.equal((await fetch(`${srv.url}/auth/dev?name=x`, { redirect: 'manual' })).status, 404);
 });
 
 test('camera and text players use separate queues', async (t) => {

@@ -19,6 +19,10 @@
       <button class="link" data-nav="leaderboard">Leaderboard</button>
       <button class="link" data-modal="plus-modal">Trivegle+</button>
       <button class="link" data-modal="advertise-modal">Advertise</button>
+      <span class="account" id="account" hidden>
+        <b id="account-name"></b>
+        <button class="link small" id="signout-btn">Sign out</button>
+      </span>
     </nav>
   </header>
 
@@ -30,8 +34,17 @@
           <h1>Mog strangers <span class="accent">with your brain.</span></h1>
           <p class="sub">Get paired with a random person. Three rounds of trivia. Chat between rounds. Winner climbs the leaderboard. Last round is worth <b>double</b>.</p>
 
+          <div id="signin-panel" class="signin-panel" hidden>
+            <h3>Sign in to play</h3>
+            <p class="muted">Signing in keeps your rating safe and helps keep trolls out. Strangers only ever see your nickname, never your real name or email.</p>
+            <div class="signin-buttons" id="signin-buttons"></div>
+            <p class="muted small-print" id="signin-empty" hidden>No sign-in providers are configured yet. Add Google, Facebook or Discord keys (see README).</p>
+            <p id="signin-error" class="error" hidden></p>
+          </div>
+
+          <div id="play-panel" hidden>
           <label class="field">
-            <span>Your name</span>
+            <span>Your nickname</span>
             <input id="name-input" maxlength="16" placeholder="e.g. QuizGoblin" autocomplete="off">
           </label>
 
@@ -71,6 +84,7 @@
               <option value="medium" selected>Medium</option>
               <option value="hard">Hard</option>
             </select>
+          </div>
           </div>
         </div>
 
@@ -112,6 +126,26 @@
     <!-- MATCH -->
     <section id="screen-match" class="screen">
       <div class="match-grid">
+        <div class="video-row" id="video-row" hidden>
+          <div class="video-tile opp">
+            <video id="remote-video" autoplay playsinline></video>
+            <div class="video-cover" id="remote-cover">
+              <span id="remote-status">Connecting camera…</span>
+              <button class="btn small" id="reveal-btn" hidden>👁 Reveal stranger</button>
+            </div>
+            <span class="video-label">Stranger</span>
+          </div>
+          <div class="video-tile you">
+            <video id="local-video" autoplay playsinline muted></video>
+            <span class="video-label">You</span>
+            <div class="video-controls">
+              <button class="icon-btn" id="cam-btn" title="Turn camera off">📷</button>
+              <button class="icon-btn off" id="mic-btn" title="Unmute mic">🔇</button>
+              <button class="icon-btn" id="hide-btn" title="Hide stranger's video">🙈</button>
+            </div>
+          </div>
+        </div>
+
         <div class="arena">
           <div class="scorebar">
             <div class="side-score you">
@@ -127,26 +161,6 @@
               <span class="label" id="opp-label">Stranger</span>
               <span class="name" id="opp-name"></span>
               <span class="score" id="opp-score">0</span>
-            </div>
-          </div>
-
-          <div class="video-row" id="video-row" hidden>
-            <div class="video-tile opp">
-              <video id="remote-video" autoplay playsinline></video>
-              <div class="video-cover" id="remote-cover">
-                <span id="remote-status">Connecting camera…</span>
-                <button class="btn small" id="reveal-btn" hidden>👁 Reveal stranger</button>
-              </div>
-              <span class="video-label">Stranger</span>
-            </div>
-            <div class="video-tile you">
-              <video id="local-video" autoplay playsinline muted></video>
-              <span class="video-label">You</span>
-              <div class="video-controls">
-                <button class="icon-btn" id="cam-btn" title="Turn camera off">📷</button>
-                <button class="icon-btn off" id="mic-btn" title="Unmute mic">🔇</button>
-                <button class="icon-btn" id="hide-btn" title="Hide stranger's video">🙈</button>
-              </div>
             </div>
           </div>
 

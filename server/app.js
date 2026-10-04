@@ -11,6 +11,7 @@ const { createBot, DIFFICULTIES } = require('./bot');
 const { PlayerStore, publicProfile } = require('./store');
 const { ratingDeltas } = require('./elo');
 const { cleanChat, cleanName, createRateLimiter } = require('./moderation');
+const { setupAuth, providersFromEnv } = require('./auth');
 
 function createApp({
   dataDir = path.join(__dirname, '..', 'data'),
@@ -19,7 +20,16 @@ function createApp({
   botTimeScale = 1,
   ads = adsConfigFromEnv(),
   iceServers = iceServersFromEnv(),
+  providers = providersFromEnv(),
+  devLogin = process.env.DEV_LOGIN === '1' ||
+    (process.env.NODE_ENV !== 'production' && Object.keys(providers).length === 0),
+  sessionSecret = process.env.SESSION_SECRET,
+  publicUrl = process.env.PUBLIC_URL || null,
 } = {}) {
+  if (!sessionSecret) {
+    if (process.env.NODE_ENV === 'production') throw new Error('SESSION_SECRET must be set in production');
+    sessionSecret = require('crypto').randomBytes(32).toString('hex'); // dev: sessions reset on restart
+  }
   const store = new PlayerStore(persist ? path.join(dataDir, 'players.json') : null);
   const reportsFile = persist ? path.join(dataDir, 'reports.jsonl') : null;
 
@@ -33,6 +43,8 @@ function createApp({
 
   // ---------- HTTP ----------
   app.disable('x-powered-by');
+  app.set('trust proxy', 1); // correct https:// callback URLs behind Render/Railway/Fly proxies
+  const auth = setupAuth(app, { store, providers, devLogin, secret: sessionSecret, publicUrl });
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.get('/api/leaderboard', (_req, res) => res.json(store.leaderboard(50)));
   app.get('/api/config', (_req, res) => res.json({ ads, iceServers, difficulties: Object.keys(DIFFICULTIES) }));
@@ -149,23 +161,42 @@ function createApp({
 
   // ---------- Sockets ----------
   io.on('connection', (socket) => {
-    const session = { socket, player: null, match: null, lastMatch: null, video: false };
+    // Identity comes only from the signed session cookie set at sign-in.
+    const session = {
+      socket,
+      player: auth.playerFromCookieHeader(socket.request.headers.cookie),
+      match: null,
+      lastMatch: null,
+      video: false,
+    };
     sessions.set(socket.id, session);
 
-    socket.on('hello', ({ token, name } = {}) => {
-      const cleaned = name === undefined || name === '' ? undefined : cleanName(name);
-      if (cleaned === null) {
-        socket.emit('errorMsg', { message: 'That name is not allowed. Use 2–16 letters or numbers.' });
+    socket.on('hello', ({ name } = {}) => {
+      if (!session.player) {
+        socket.emit('authRequired');
         return;
       }
-      const { player, token: newToken } = store.login(token, cleaned);
-      session.player = player;
-      socket.emit('welcome', { token: newToken, profile: publicProfile(player) });
+      if (name !== undefined && name !== '') {
+        const cleaned = cleanName(name);
+        if (cleaned === null) {
+          socket.emit('errorMsg', { message: 'That name is not allowed. Use 2–16 letters or numbers.' });
+          return;
+        }
+        if (store.isNameTaken(cleaned, session.player.id)) {
+          socket.emit('errorMsg', { message: 'That nickname is taken. Try another one.' });
+          return;
+        }
+        store.rename(session.player.id, cleaned);
+      }
+      socket.emit('welcome', { profile: publicProfile(session.player), needsName: !!session.player.needsName });
       broadcastStats();
     });
 
     socket.on('queue', ({ mode = 'ranked', difficulty = 'medium', video = false } = {}) => {
-      if (!session.player) return;
+      if (!session.player) return socket.emit('authRequired');
+      if (session.player.needsName) {
+        return socket.emit('errorMsg', { message: 'Pick a nickname first.' });
+      }
       leaveMatch(session);
       removeFromQueue(session);
       session.video = video === true;

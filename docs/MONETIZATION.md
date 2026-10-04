@@ -61,7 +61,8 @@ Sponsorships (sections 1.3 and 1.4) usually pay a flat fee, roughly $500–$5,00
 
 - **Age:** the site requires 13+ (checked on the landing page). Don't knowingly collect data from children under 13 (COPPA). Because many players will be teenagers, **serve non-personalized ads by default**, and have a lawyer review this before scaling.
 - **EU/UK consent:** AdSense requires a Google-certified consent management platform (CMP) for EEA/UK visitors. Turn on Google's built-in "Privacy & messaging" CMP or a third-party one.
-- **Privacy policy and terms:** required by AdSense and by Stripe. List what's stored: nickname, rating, a hashed login token, and chat transcripts attached to reports.
+- **Privacy policy and terms:** required by AdSense, Stripe, Google sign-in and Facebook Login (Meta also requires data-deletion instructions). List what's stored: your sign-in provider's account ID (no name, email or photo), nickname, rating and stats, and chat transcripts attached to reports.
+- **Sign-in helps sales:** because every player has a real account, bans stick and abuse drops. That's a selling point when pitching sponsors.
 - **Moderation:** advertisers won't buy on an unmoderated chat site. That's a big part of why the original Omegle shut down. What's built: profanity filter, link and contact-handle stripping, rate limiting, report with transcript, block. Before scaling, add a moderation API (e.g. OpenAI or Perspective) and a human review queue for `data/reports.jsonl`.
 - **Camera mode is 18+ and opt-in.** It's the riskiest feature on the site, so:
   - **Run ads in text mode first.** Advertisers are far more cautious about live video next to their brand. Treat camera-mode inventory as a separate, lower-priority bucket until moderation is proven.

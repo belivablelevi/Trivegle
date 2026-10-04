@@ -70,11 +70,16 @@ test('rate limiter allows a burst then throttles', () => {
   assert.ok(rl.allow('k', 1000));
 });
 
-test('store: login is stable per token and results update rating/streaks', () => {
+test('store: accounts map to one player and results update rating/streaks', () => {
   const store = new PlayerStore(null);
-  const { player, token } = store.login(undefined, 'Alice');
-  assert.equal(store.login(token).player.id, player.id);
-  assert.notEqual(store.login('nope'.repeat(10)).player.id, player.id);
+  const player = store.findOrCreateByAccount('google', '12345');
+  assert.equal(player.needsName, true);
+  assert.equal(store.findOrCreateByAccount('google', '12345').id, player.id);
+  assert.notEqual(store.findOrCreateByAccount('facebook', '12345').id, player.id);
+  store.rename(player.id, 'Alice');
+  assert.equal(player.needsName, false);
+  assert.equal(store.isNameTaken('alice'), true);
+  assert.equal(store.isNameTaken('ALICE', player.id), false);
 
   store.recordResult(player.id, { result: 'win', ratingDelta: 16, ranked: true, correct: 5, answered: 9 });
   store.recordResult(player.id, { result: 'win', ratingDelta: 14, ranked: true, correct: 6, answered: 9 });
@@ -84,5 +89,13 @@ test('store: login is stable per token and results update rating/streaks', () =>
   assert.equal(p.bestStreak, 2);
   assert.equal(p.streak, 0);
   assert.equal(store.leaderboard()[0].accuracy, 48);
-  assert.equal(p.tokenHash.includes(token), false, 'raw token is never stored');
+});
+
+test('signed cookies: tampering is detected', () => {
+  const { createSigner } = require('../server/auth');
+  const signer = createSigner('secret');
+  const signed = signer.sign('player|123');
+  assert.equal(signer.verify(signed), 'player|123');
+  assert.equal(signer.verify(signed.replace('player', 'admin')), null);
+  assert.equal(signer.verify('garbage'), null);
 });
