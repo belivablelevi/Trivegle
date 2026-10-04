@@ -41,6 +41,7 @@
             <div class="signin-buttons" id="signin-buttons"></div>
             <p class="muted small-print" id="signin-empty" hidden>No sign-in providers are configured yet. Add Google, Facebook or Discord keys (see README).</p>
             <p id="signin-error" class="error" hidden></p>
+            <p class="muted small-print">By signing in you agree to our <a class="link" href="/terms.html">Terms of Service</a> and <a class="link" href="/privacy.html">Privacy Policy</a>.</p>
           </div>
 
           <div id="play-panel" hidden>
@@ -105,6 +106,7 @@
               <div><b id="p-streak">0</b><span>Streak</span></div>
               <div><b id="p-acc">0%</b><span>Accuracy</span></div>
             </div>
+            <p class="account-links"><a class="link small" href="/privacy.html#delete">Delete account</a></p>
           </div>
           <div class="card">
             <h3>Top moggers <button class="link small" data-nav="leaderboard">see all →</button></h3>
@@ -218,6 +220,8 @@
     <span>© Trivegle</span>
     <button class="link small" data-modal="rules-modal">Rules &amp; safety</button>
     <button class="link small" data-modal="advertise-modal">Advertise</button>
+    <a class="link small" href="/terms.html">Terms</a>
+    <a class="link small" href="/privacy.html">Privacy</a>
     <span class="muted">Text chat is filtered and moderated. Camera mode is 18+. Never share personal info.</span>
   </footer>
 
@@ -232,6 +236,7 @@
       <li>Use <b>Report</b> if someone breaks the rules — reports include the chat transcript and are reviewed.</li>
       <li>Use <b>Block</b> to never be matched with someone again.</li>
       <li>Bots are always labelled as bots.</li>
+      <li>Full details: <a class="link" href="/terms.html">Terms of Service</a> · <a class="link" href="/privacy.html">Privacy Policy</a></li>
     </ul>
     <form method="dialog"><button class="btn primary">Got it</button></form>
   </dialog>
@@ -265,7 +270,7 @@
       <li><b>Queue &amp; results placements</b> — display ads where players are already pausing</li>
       <li><b>Weekly tournaments</b> — title-sponsor a prize leaderboard</li>
     </ul>
-    <p>Email <b>ads@trivegle.example</b> for the media kit.</p>
+    <p>Email <b data-contact-email>us</b> for the media kit.</p>
     <form method="dialog"><button class="btn primary">Close</button></form>
   </dialog>
 

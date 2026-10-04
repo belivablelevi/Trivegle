@@ -292,3 +292,24 @@ test('questions report difficulty and players do not see repeats in their next m
   assert.equal(new Set(seen).size, 8, 'no repeated questions across the two matches');
   p.socket.close();
 });
+
+test('privacy and terms pages are served; account deletion removes the player and signs them out', async (t) => {
+  const srv = await startServer({ contactEmail: 'hello@example.com' });
+  t.after(() => srv.close());
+  for (const page of ['/privacy.html', '/terms.html', '/legal.js']) {
+    assert.equal((await fetch(srv.url + page)).status, 200, page);
+  }
+  assert.equal((await (await fetch(`${srv.url}/api/config`)).json()).contactEmail, 'hello@example.com');
+
+  assert.equal((await fetch(`${srv.url}/api/account/delete`, { method: 'POST' })).status, 401);
+
+  const { socket, cookie } = await client(srv.url, 'Leaver');
+  const gone = once(socket, 'disconnect');
+  const res = await fetch(`${srv.url}/api/account/delete`, { method: 'POST', headers: { cookie } });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('set-cookie'), /Max-Age=0/);
+  await gone;
+  assert.equal(srv.store.players.size, 0);
+  const me = await (await fetch(`${srv.url}/api/me`, { headers: { cookie } })).json();
+  assert.equal(me.player, null, 'old cookie no longer signs anyone in');
+});

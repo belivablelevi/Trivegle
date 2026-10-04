@@ -14,28 +14,40 @@ const { cleanChat, cleanName, createRateLimiter } = require('./moderation');
 const { setupAuth, providersFromEnv } = require('./auth');
 const { rankFor, RANKS, DIFFICULTY_LABELS } = require('./ranks');
 
+// Deployed (Railway sets RAILWAY_PROJECT_ID) counts as production even if NODE_ENV isn't set.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_PROJECT_ID;
+
 function createApp({
-  dataDir = path.join(__dirname, '..', 'data'),
+  // On Railway, attach a volume and data is stored there automatically.
+  dataDir = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, '..', 'data'),
   persist = true,
   matchConfig = {},
   botTimeScale = 1,
   ads = adsConfigFromEnv(),
   iceServers = iceServersFromEnv(),
   providers = providersFromEnv(),
-  devLogin = process.env.DEV_LOGIN === '1' ||
-    (process.env.NODE_ENV !== 'production' && Object.keys(providers).length === 0),
+  // Dev sign-in lets anyone pick any name, so it is never enabled in production.
+  devLogin = !IS_PRODUCTION && (process.env.DEV_LOGIN === '1' || Object.keys(providers).length === 0),
   sessionSecret = process.env.SESSION_SECRET,
-  publicUrl = process.env.PUBLIC_URL || null,
+  publicUrl = process.env.PUBLIC_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null),
+  contactEmail = process.env.CONTACT_EMAIL || null,
   // Rating-based matchmaking: start by looking ±baseGap rating points away, widening
   // by gapPerSecond while waiting, so nobody waits forever in a quiet queue.
   matchmaking = { baseGap: 150, gapPerSecond: 25, tickMs: 1000 },
 } = {}) {
   if (!sessionSecret) {
-    if (process.env.NODE_ENV === 'production') throw new Error('SESSION_SECRET must be set in production');
+    if (IS_PRODUCTION) {
+      throw new Error('SESSION_SECRET must be set in production (Railway: add it under your service\'s Variables).');
+    }
     sessionSecret = require('crypto').randomBytes(32).toString('hex'); // dev: sessions reset on restart
+  }
+  if (persist && process.env.RAILWAY_PROJECT_ID && !process.env.RAILWAY_VOLUME_MOUNT_PATH && !process.env.DATA_DIR) {
+    console.warn('[trivegle] WARNING: no Railway volume attached. Player data will be lost on every redeploy.');
   }
   const store = new PlayerStore(persist ? path.join(dataDir, 'players.json') : null);
   const reportsFile = persist ? path.join(dataDir, 'reports.jsonl') : null;
+  if (reportsFile) pruneReports(reportsFile);
 
   const app = express();
   const httpServer = http.createServer(app);
@@ -61,7 +73,23 @@ function createApp({
       .filter((d) => d.pct > 0),
   }));
   app.get('/api/config', (_req, res) =>
-    res.json({ ads, iceServers, ranks: rankGuide, difficulties: Object.keys(DIFFICULTIES) }));
+    res.json({ ads, iceServers, ranks: rankGuide, contactEmail, difficulties: Object.keys(DIFFICULTIES) }));
+
+  // Self-serve account deletion (linked from the Privacy Policy; also satisfies
+  // Facebook's data-deletion requirement).
+  app.post('/api/account/delete', (req, res) => {
+    const player = auth.playerFromCookieHeader(req.headers.cookie);
+    if (!player) return res.status(401).json({ error: 'Not signed in' });
+    for (const s of sessions.values()) {
+      if (s.player?.id !== player.id) continue;
+      removeFromQueue(s);
+      leaveMatch(s);
+      s.socket.disconnect(true);
+    }
+    store.deletePlayer(player.id);
+    auth.clearSession(res);
+    res.json({ ok: true });
+  });
   app.get('/api/health', (_req, res) => res.json({ ok: true, online: sessions.size }));
   app.get('/ads.txt', (_req, res) => {
     if (!ads.adsenseClient) return res.status(404).end();
@@ -363,6 +391,26 @@ function createApp({
   return { app, httpServer, io, store, close };
 }
 
+const REPORT_RETENTION_DAYS = 365;
+
+/** Drop moderation reports older than the retention period stated in the Privacy Policy. */
+function pruneReports(file, now = Date.now()) {
+  if (!fs.existsSync(file)) return;
+  const cutoff = now - REPORT_RETENTION_DAYS * 864e5;
+  const kept = fs
+    .readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => {
+      if (!line.trim()) return false;
+      try {
+        return Date.parse(JSON.parse(line).at) >= cutoff;
+      } catch {
+        return false;
+      }
+    });
+  fs.writeFileSync(file, kept.length ? kept.join('\n') + '\n' : '');
+}
+
 function adsConfigFromEnv(env = process.env) {
   return {
     adsenseClient: env.ADSENSE_CLIENT || null, // e.g. "ca-pub-1234567890123456"
@@ -383,4 +431,4 @@ function iceServersFromEnv(env = process.env) {
   return servers;
 }
 
-module.exports = { createApp, adsConfigFromEnv, iceServersFromEnv };
+module.exports = { createApp, adsConfigFromEnv, iceServersFromEnv, pruneReports };

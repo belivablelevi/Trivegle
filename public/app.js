@@ -755,6 +755,10 @@
   // ---------- Boot ----------
   fetch('/api/config').then((r) => r.json()).then((cfg) => {
     state.config = cfg;
+    // Advertise modal: show the contact email once it's configured (CONTACT_EMAIL).
+    $$('[data-contact-email]').forEach((n) => {
+      n.textContent = cfg.contactEmail || 'us (contact email coming soon)';
+    });
     renderStaticAds();
   }).catch(renderStaticAds);
   refreshLeaderboard();

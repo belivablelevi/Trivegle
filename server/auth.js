@@ -133,8 +133,10 @@ function setupAuth(app, { store, providers, devLogin, secret, publicUrl }) {
     });
   });
 
+  const clearSession = (res) => cookie(res, SESSION_COOKIE, '', 0);
+
   app.post('/auth/logout', (_req, res) => {
-    cookie(res, SESSION_COOKIE, '', 0);
+    clearSession(res);
     res.json({ ok: true });
   });
 
@@ -196,7 +198,7 @@ function setupAuth(app, { store, providers, devLogin, secret, publicUrl }) {
     });
   }
 
-  return { playerFromCookieHeader };
+  return { playerFromCookieHeader, clearSession };
 }
 
 module.exports = { PROVIDERS, providersFromEnv, setupAuth, parseCookies, createSigner, SESSION_COOKIE };

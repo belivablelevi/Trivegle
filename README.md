@@ -36,17 +36,41 @@ npm test             # unit + match engine + end-to-end socket tests
 
 With no sign-in providers configured, local development shows a **Dev sign-in** button so you can test right away. Open two browser windows (one normal, one private) and sign in as two different nicknames to play against yourself. Camera mode needs `localhost` or HTTPS, because browsers only allow camera access on secure pages.
 
+## Deploy to Railway
+
+The repo includes `railway.json`, so Railway knows how to build and start the app and runs a health check on `/api/health`. You don't need a domain: Railway gives you a free HTTPS address like `trivegle-production.up.railway.app`.
+
+1. **Create the project.** At [railway.com](https://railway.com), choose **New Project → Deploy from GitHub repo** and pick this repository (and this branch, until it's merged).
+2. **Add a volume, or player data will be wiped on every deploy.** Right-click the project canvas (or press `⌘K`) → **Volume**, attach it to the Trivegle service, and mount it at `/data`. The app detects it automatically through `RAILWAY_VOLUME_MOUNT_PATH`. If you forget, the deploy logs show a warning.
+3. **Get your address.** Open the service → **Settings → Networking → Public Networking → Generate Domain**.
+4. **Set variables.** Under the service's **Variables** tab, add:
+   - `SESSION_SECRET`: a long random string, e.g. the output of `openssl rand -hex 32`. Required; the app refuses to start without it.
+   - `CONTACT_EMAIL`: where players and advertisers can reach you. Shown on the Privacy, Terms and Advertise pages.
+   - Your sign-in keys: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and the matching pairs for Facebook and Discord (see [Setting up sign-in](#setting-up-sign-in)).
+   - `NODE_ENV=production` (recommended).
+   - You don't need `PUBLIC_URL` or `PORT`. The app uses Railway's `RAILWAY_PUBLIC_DOMAIN` and `PORT` automatically. Set `PUBLIC_URL` only once you add your own domain.
+5. **Register your return addresses** with each sign-in provider: `https://YOUR-APP.up.railway.app/auth/google/callback`, `/auth/facebook/callback` and `/auth/discord/callback`. Use `https://YOUR-APP.up.railway.app/privacy.html` and `/terms.html` wherever a provider asks for a privacy policy or terms URL. For Facebook's data-deletion URL, use `https://YOUR-APP.up.railway.app/privacy.html#delete`.
+6. **Deploy.** Railway redeploys automatically on every push. Because a volume is attached, each redeploy has a few seconds of downtime, and anyone mid-match gets disconnected.
+
+On Railway, dev sign-in is always off, even without `NODE_ENV=production`.
+
+**Adding a domain later:** in **Settings → Networking**, add a custom domain and follow Railway's DNS instructions. Then set `PUBLIC_URL=https://yourdomain.com` and add the new return addresses with each sign-in provider. Players keep their accounts.
+
+**Back up player data:** use the Railway CLI, e.g. `railway volume files download /players.json ./players-backup.json`.
+
 ## Configuration
 
 | Env var | Purpose |
 |---------|---------|
 | `PORT` | HTTP port (default `3000`) |
-| `PUBLIC_URL` | Your site's public URL, e.g. `https://trivegle.com`. Used for sign-in callback URLs and secure cookies |
+| `PUBLIC_URL` | Your site's public URL, e.g. `https://trivegle.com`. Used for sign-in callback URLs and secure cookies. On Railway it defaults to your Railway address |
+| `CONTACT_EMAIL` | Contact address shown on the Privacy, Terms and Advertise pages |
+| `DATA_DIR` | Where player data and reports are saved. Defaults to the Railway volume if one is attached, otherwise `./data` |
 | `SESSION_SECRET` | Long random string used to sign login cookies. **Required in production** (`openssl rand -hex 32`) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Turns on "Continue with Google" |
 | `FACEBOOK_CLIENT_ID` / `FACEBOOK_CLIENT_SECRET` | Turns on "Continue with Facebook" (Facebook calls these App ID / App Secret) |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | Turns on "Continue with Discord" |
-| `DEV_LOGIN` | `1` forces the dev sign-in button on. It's on automatically in development when no providers are set. **Never enable it in production** |
+| `DEV_LOGIN` | `1` forces the dev sign-in button on locally. It's on automatically in development when no providers are set, and always off in production and on Railway |
 | `ADSENSE_CLIENT` | e.g. `ca-pub-1234567890123456`. Turns on Google AdSense and `/ads.txt` |
 | `ADSENSE_SLOT_LANDING` / `ADSENSE_SLOT_QUEUE` / `ADSENSE_SLOT_RESULTS` | AdSense slot IDs for each placement |
 | `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` | Optional TURN server for camera mode. Without one, video fails for players on some strict networks (school, office, some mobile carriers); chat and the game still work |
@@ -75,11 +99,15 @@ Each provider only appears on the sign-in screen once its two env vars are set. 
 
 **Adding another provider** (Apple, Twitch, X…): add one entry to `PROVIDERS` in `server/auth.js` with its authorize URL, token URL, scope and a function that returns the user's account ID.
 
-**Banning a player:** reports in `data/reports.jsonl` include the reported player's ID. Set `"banned": true` on that player in `data/players.json` and restart. They're signed out and can't sign back in with that account.
+**Banning a player:** reports in `reports.jsonl` include the reported player's ID. Set `"banned": true` on that player in `players.json` and restart. They're signed out and can't sign back in with that account. On Railway, edit the files on the volume with `railway volume browse /`, then restart the service.
 
-## Data
+## Data and legal pages
 
-Player data is saved to `data/players.json` and reports to `data/reports.jsonl`. Both are gitignored.
+Player data is saved to `players.json` and reports to `reports.jsonl` in the data folder (the Railway volume, or `./data` locally, which is gitignored). Reports older than 12 months are deleted automatically when the server starts, as the Privacy Policy promises.
+
+- **Privacy Policy** at `/privacy.html` and **Terms of Service** at `/terms.html`, linked from the footer, the sign-in screen and the rules.
+- **Account deletion:** players can delete their account and all game data themselves, from the Privacy page or the **Delete account** link under Your stats. This also satisfies Facebook's data-deletion requirement.
+- **Keep the pages accurate:** they describe exactly what the app collects today. If you add features that collect more (analytics, email, payments), update both pages. They were written as a solid starting point, not legal advice, so have a lawyer review them, especially before ads, paid features or a big launch. A lawyer would typically also add your legal name, your jurisdiction's governing-law clause and a mailing address.
 
 ## Project layout
 
@@ -143,6 +171,6 @@ Each round after the first shifts a little of that mix toward harder questions, 
 - Swap the JSON store for Postgres or Redis if you run more than one server process (and use the Socket.IO Redis adapter).
 - **Camera mode:** add a TURN server (e.g. Twilio, Cloudflare or self-hosted coturn) and an automated video-moderation provider before promoting camera mode widely. The 18+ checkbox is self-declared; consider real age verification.
 - Add a moderation API and a review workflow for `data/reports.jsonl`.
-- Set `SESSION_SECRET` and `PUBLIC_URL`, and don't set `DEV_LOGIN`.
-- Add a privacy policy, terms of service and a consent banner (required by AdSense in the EU/UK). See `docs/MONETIZATION.md`.
-- Put it behind HTTPS (e.g. Render, Railway or Fly.io; they all run `npm start` as-is).
+- Deploy with a volume attached and `SESSION_SECRET` set (see [Deploy to Railway](#deploy-to-railway)).
+- Before turning on AdSense: buy a domain and add a cookie consent banner (Google requires one for EU/UK visitors). See `docs/MONETIZATION.md`.
+- Have a lawyer review `/privacy.html` and `/terms.html`.

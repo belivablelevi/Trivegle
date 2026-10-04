@@ -145,3 +145,20 @@ test('signed cookies: tampering is detected', () => {
   assert.equal(signer.verify(signed.replace('player', 'admin')), null);
   assert.equal(signer.verify('garbage'), null);
 });
+
+test('reports older than 12 months are pruned', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { pruneReports } = require('../server/app');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'trivegle-')), 'reports.jsonl');
+  const now = Date.parse('2026-10-04T00:00:00Z');
+  fs.writeFileSync(file, [
+    JSON.stringify({ at: '2025-01-01T00:00:00Z', reason: 'old' }),
+    JSON.stringify({ at: '2026-09-01T00:00:00Z', reason: 'recent' }),
+    'not json',
+  ].join('\n') + '\n');
+  pruneReports(file, now);
+  const left = fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l).reason);
+  assert.deepEqual(left, ['recent']);
+});

@@ -100,6 +100,20 @@ class PlayerStore {
     return p;
   }
 
+  /** Permanently delete a player and their linked sign-in accounts. */
+  deletePlayer(id) {
+    const p = this.players.get(id);
+    if (!p) return false;
+    for (const acct of p.accounts || []) this.byAccount.delete(acct);
+    this.players.delete(id);
+    // Remove them from other players' block lists too.
+    for (const other of this.players.values()) {
+      if (other.blocked) other.blocked = other.blocked.filter((b) => b !== id);
+    }
+    this.scheduleSave();
+    return true;
+  }
+
   get(id) {
     return this.players.get(id);
   }
