@@ -1,38 +1,40 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 
 const { rankInfo } = require('./ranks');
+const { MemoryBackend } = require('./persistence');
 
 const STARTING_RATING = 1000;
 const RECENT_QUESTIONS = 400; // how many recent question ids to avoid repeating
 
 /**
- * Tiny JSON-file player store. Good enough for a single server; swap for
- * Postgres/Redis when you scale past one process.
+ * In-memory player store that saves changes through a persistence backend
+ * (Postgres, JSON file, or nothing). Good enough for a single server process.
  */
 class PlayerStore {
-  constructor(file) {
-    this.file = file;
+  constructor(backend) {
+    this.backend = backend || new MemoryBackend();
     this.players = new Map(); // id -> player
     this.byAccount = new Map(); // "provider:providerId" -> player id
+    this.dirty = new Set(); // player ids changed since the last save
+    this.deleted = new Set(); // player ids deleted since the last save
     this.saveTimer = null;
-    this.load();
+    this.saving = Promise.resolve();
   }
 
-  load() {
-    if (!this.file || !fs.existsSync(this.file)) return;
-    const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-    for (const p of data.players || []) {
+  /** Load all players from the backend. Call once before serving traffic. */
+  async init() {
+    for (const p of await this.backend.load()) {
       this.players.set(p.id, p);
       for (const acct of p.accounts || []) this.byAccount.set(acct, p.id);
     }
   }
 
-  scheduleSave() {
-    if (!this.file || this.saveTimer) return;
+  /** Mark a player as changed; changes are written in batches about once a second. */
+  scheduleSave(id) {
+    if (id) this.dirty.add(id);
+    if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
       this.flush();
@@ -40,12 +42,27 @@ class PlayerStore {
     this.saveTimer.unref?.();
   }
 
+  /** Write pending changes now. Saves run one at a time; failed saves are retried. */
   flush() {
-    if (!this.file) return;
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ players: [...this.players.values()] }));
-    fs.renameSync(tmp, this.file);
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    this.saving = this.saving.then(async () => {
+      const changedIds = [...this.dirty];
+      const deleted = [...this.deleted];
+      if (!changedIds.length && !deleted.length) return;
+      this.dirty.clear();
+      this.deleted.clear();
+      const changed = changedIds.map((id) => this.players.get(id)).filter(Boolean);
+      try {
+        await this.backend.savePlayers({ changed, deleted, all: [...this.players.values()] });
+      } catch (err) {
+        console.error('[store] save failed, will retry:', err.message);
+        changedIds.forEach((id) => this.dirty.add(id));
+        deleted.forEach((id) => this.deleted.add(id));
+        this.scheduleSave();
+      }
+    });
+    return this.saving;
   }
 
   /**
@@ -76,7 +93,7 @@ class PlayerStore {
     };
     this.players.set(player.id, player);
     this.byAccount.set(key, player.id);
-    this.scheduleSave();
+    this.scheduleSave(player.id);
     return player;
   }
 
@@ -95,7 +112,7 @@ class PlayerStore {
     if (p.name !== name || p.needsName) {
       p.name = name;
       p.needsName = false;
-      this.scheduleSave();
+      this.scheduleSave(id);
     }
     return p;
   }
@@ -106,9 +123,14 @@ class PlayerStore {
     if (!p) return false;
     for (const acct of p.accounts || []) this.byAccount.delete(acct);
     this.players.delete(id);
+    this.dirty.delete(id);
+    this.deleted.add(id);
     // Remove them from other players' block lists too.
     for (const other of this.players.values()) {
-      if (other.blocked) other.blocked = other.blocked.filter((b) => b !== id);
+      if (other.blocked?.includes(id)) {
+        other.blocked = other.blocked.filter((b) => b !== id);
+        this.dirty.add(other.id);
+      }
     }
     this.scheduleSave();
     return true;
@@ -140,7 +162,7 @@ class PlayerStore {
         p.draws += 1;
       }
     }
-    this.scheduleSave();
+    this.scheduleSave(id);
     return p;
   }
 
@@ -149,7 +171,7 @@ class PlayerStore {
     const p = this.players.get(id);
     if (!p) return;
     p.recentQuestions = [...(p.recentQuestions || []), ...questionIds].slice(-RECENT_QUESTIONS);
-    this.scheduleSave();
+    this.scheduleSave(id);
   }
 
   leaderboard(limit = 50) {

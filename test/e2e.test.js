@@ -16,6 +16,7 @@ async function startServer(opts = {}) {
   const server = createApp({
     persist: false, matchConfig: FAST, botTimeScale: 0.01, devLogin: true, providers: {}, sessionSecret: 'test-secret', ...opts,
   });
+  await server.ready;
   await new Promise((r) => server.httpServer.listen(0, r));
   const url = `http://localhost:${server.httpServer.address().port}`;
   return { ...server, url };

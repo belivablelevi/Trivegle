@@ -1,6 +1,5 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const express = require('express');
@@ -9,15 +8,19 @@ const { Server } = require('socket.io');
 const { Match } = require('./match');
 const { createBot, DIFFICULTIES } = require('./bot');
 const { PlayerStore, publicProfile } = require('./store');
+const { createBackend } = require('./persistence');
 const { ratingDeltas } = require('./elo');
 const { cleanChat, cleanName, createRateLimiter } = require('./moderation');
 const { setupAuth, providersFromEnv } = require('./auth');
 const { rankFor, RANKS, DIFFICULTY_LABELS } = require('./ranks');
 
-// Deployed (Railway sets RAILWAY_PROJECT_ID) counts as production even if NODE_ENV isn't set.
-const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_PROJECT_ID;
+// Deployed on Railway or Render counts as production even if NODE_ENV isn't set.
+const IS_PRODUCTION =
+  process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_PROJECT_ID || !!process.env.RENDER;
 
 function createApp({
+  // A Postgres URL (e.g. a free Neon database) takes priority over files.
+  databaseUrl = process.env.DATABASE_URL || null,
   // On Railway, attach a volume and data is stored there automatically.
   dataDir = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, '..', 'data'),
   persist = true,
@@ -30,7 +33,9 @@ function createApp({
   devLogin = !IS_PRODUCTION && (process.env.DEV_LOGIN === '1' || Object.keys(providers).length === 0),
   sessionSecret = process.env.SESSION_SECRET,
   publicUrl = process.env.PUBLIC_URL ||
-    (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null),
+    (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null) ||
+    process.env.RENDER_EXTERNAL_URL ||
+    null,
   contactEmail = process.env.CONTACT_EMAIL || null,
   // Rating-based matchmaking: start by looking ±baseGap rating points away, widening
   // by gapPerSecond while waiting, so nobody waits forever in a quiet queue.
@@ -42,12 +47,21 @@ function createApp({
     }
     sessionSecret = require('crypto').randomBytes(32).toString('hex'); // dev: sessions reset on restart
   }
-  if (persist && process.env.RAILWAY_PROJECT_ID && !process.env.RAILWAY_VOLUME_MOUNT_PATH && !process.env.DATA_DIR) {
-    console.warn('[trivegle] WARNING: no Railway volume attached. Player data will be lost on every redeploy.');
+  if (persist && !databaseUrl) {
+    if (process.env.RAILWAY_PROJECT_ID && !process.env.RAILWAY_VOLUME_MOUNT_PATH && !process.env.DATA_DIR) {
+      console.warn('[trivegle] WARNING: no Railway volume attached. Player data will be lost on every redeploy.');
+    }
+    if (process.env.RENDER) {
+      console.warn('[trivegle] WARNING: DATABASE_URL is not set. On Render, player data is lost whenever the server restarts.');
+    }
   }
-  const store = new PlayerStore(persist ? path.join(dataDir, 'players.json') : null);
-  const reportsFile = persist ? path.join(dataDir, 'reports.jsonl') : null;
-  if (reportsFile) pruneReports(reportsFile);
+  const backend = createBackend({ persist, databaseUrl, dataDir });
+  const store = new PlayerStore(backend);
+  // Load saved players and clean up old reports before accepting traffic.
+  const ready = (async () => {
+    await store.init();
+    await backend.pruneReports();
+  })();
 
   const app = express();
   const httpServer = http.createServer(app);
@@ -347,10 +361,7 @@ function createApp({
         reason: String(reason).slice(0, 100),
         transcript: m.chatLog.slice(-20),
       };
-      if (reportsFile) {
-        fs.mkdirSync(path.dirname(reportsFile), { recursive: true });
-        fs.appendFileSync(reportsFile, JSON.stringify(entry) + '\n');
-      }
+      backend.addReport(entry).catch((err) => console.error('[reports] could not save report:', err.message));
       blockOpponent(session);
       socket.emit('chat', { from: 'system', text: 'Thanks — report sent and this player is blocked.' });
     });
@@ -377,38 +388,21 @@ function createApp({
     const blocked = new Set(session.player.blocked || []);
     blocked.add(opp.id);
     session.player.blocked = [...blocked];
-    store.scheduleSave();
+    store.scheduleSave(session.player.id);
   }
 
-  function close() {
+  /** Stop timers, save pending changes and shut down. Resolves once data is saved. */
+  async function close() {
     clearInterval(statsTimer);
     clearInterval(matchmakingTimer);
-    store.flush();
     io.close();
     httpServer.close();
+    await ready.catch(() => {});
+    await store.flush();
+    await backend.close();
   }
 
-  return { app, httpServer, io, store, close };
-}
-
-const REPORT_RETENTION_DAYS = 365;
-
-/** Drop moderation reports older than the retention period stated in the Privacy Policy. */
-function pruneReports(file, now = Date.now()) {
-  if (!fs.existsSync(file)) return;
-  const cutoff = now - REPORT_RETENTION_DAYS * 864e5;
-  const kept = fs
-    .readFileSync(file, 'utf8')
-    .split('\n')
-    .filter((line) => {
-      if (!line.trim()) return false;
-      try {
-        return Date.parse(JSON.parse(line).at) >= cutoff;
-      } catch {
-        return false;
-      }
-    });
-  fs.writeFileSync(file, kept.length ? kept.join('\n') + '\n' : '');
+  return { app, httpServer, io, store, ready, close };
 }
 
 function adsConfigFromEnv(env = process.env) {
@@ -431,4 +425,4 @@ function iceServersFromEnv(env = process.env) {
   return servers;
 }
 
-module.exports = { createApp, adsConfigFromEnv, iceServersFromEnv, pruneReports };
+module.exports = { createApp, adsConfigFromEnv, iceServersFromEnv };

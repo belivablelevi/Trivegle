@@ -150,7 +150,7 @@ test('reports older than 12 months are pruned', () => {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
-  const { pruneReports } = require('../server/app');
+  const { pruneReportsFile: pruneReports } = require('../server/persistence');
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'trivegle-')), 'reports.jsonl');
   const now = Date.parse('2026-10-04T00:00:00Z');
   fs.writeFileSync(file, [

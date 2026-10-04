@@ -3,15 +3,26 @@
 const { createApp } = require('./app');
 
 const PORT = Number(process.env.PORT) || 3000;
-const { httpServer, close } = createApp();
+const { httpServer, ready, close } = createApp();
 
-httpServer.listen(PORT, () => {
-  console.log(`Trivegle running at http://localhost:${PORT}`);
-});
+ready
+  .then(() => {
+    httpServer.listen(PORT, () => {
+      console.log(`Trivegle running at http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Could not load saved data:', err.message);
+    process.exit(1);
+  });
 
+// Hosts send SIGTERM before restarting or sleeping the server: save everything first.
 for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
-    close();
-    process.exit(0);
+  process.once(sig, async () => {
+    try {
+      await close();
+    } finally {
+      process.exit(0);
+    }
   });
 }

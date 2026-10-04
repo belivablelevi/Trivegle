@@ -32,9 +32,37 @@ npm install
 npm start            # http://localhost:3000
 npm run dev          # same, restarts on file changes
 npm test             # unit + match engine + end-to-end socket tests
+# optional: also test Postgres storage against a throwaway database
+TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres npm test
 ```
 
 With no sign-in providers configured, local development shows a **Dev sign-in** button so you can test right away. Open two browser windows (one normal, one private) and sign in as two different nicknames to play against yourself. Camera mode needs `localhost` or HTTPS, because browsers only allow camera access on secure pages.
+
+## Deploy for free (Render + Neon)
+
+This route costs $0 (both services' free tiers usually don't ask for a card, though sign-up rules can change). **Render** runs the app; **Neon** stores player accounts and ratings in a free Postgres database. Render's free servers lose their files on every restart, so the database is required here. The repo includes `render.yaml`, so Render sets most things up automatically.
+
+What to expect on free plans:
+- **Sleeping:** Render puts free servers to sleep after about 15 minutes with no incoming traffic. The next visitor waits up to about a minute while it wakes up. Data is saved before it sleeps, so nothing is lost; only the wait is annoying.
+- **Database pauses:** Neon pauses the database after 5 minutes idle and wakes it automatically. Nothing is lost.
+- **When to upgrade:** fine for testing and early players. For a real launch, upgrade the Render service to a paid instance so it never sleeps. The database can stay on Neon's free plan.
+
+**1. Create the database (Neon)**
+1. Sign up at [neon.com](https://neon.com) and create a project (any name, nearest region).
+2. On the project dashboard, click **Connect** and copy the connection string. It starts with `postgresql://` and ends with `?sslmode=require…`. Keep it secret; it's the password to your data.
+
+**2. Create the app (Render)**
+1. Sign up at [render.com](https://render.com) with GitHub and allow access to the `trivegle` repo.
+2. Click **New → Blueprint**, choose the repo, and pick the branch with this code. Render reads `render.yaml` and creates a free web service named `trivegle`, generating a `SESSION_SECRET` for you.
+3. It asks for the values marked secret. Fill in:
+   - `DATABASE_URL`: the Neon connection string.
+   - `CONTACT_EMAIL`: your email.
+   - The Google and Discord keys: leave these blank for now if you don't have them yet, and add them in step 3.
+4. Click **Apply**. When the deploy finishes, your address is shown at the top of the service page, e.g. `https://trivegle.onrender.com`. The app detects it automatically through `RENDER_EXTERNAL_URL`, so you don't need `PUBLIC_URL`.
+
+**3. Turn on sign-in:** follow [Setting up sign-in](#setting-up-sign-in) using your Render address. Then, in Render, open the service → **Environment**, fill in the keys and save (it redeploys).
+
+**Check it worked:** the deploy logs should **not** say "DATABASE_URL is not set". On Render, dev sign-in is always off.
 
 ## Deploy to Railway
 
@@ -65,6 +93,7 @@ On Railway, dev sign-in is always off, even without `NODE_ENV=production`.
 | `PORT` | HTTP port (default `3000`) |
 | `PUBLIC_URL` | Your site's public URL, e.g. `https://trivegle.com`. Used for sign-in callback URLs and secure cookies. On Railway it defaults to your Railway address |
 | `CONTACT_EMAIL` | Contact address shown on the Privacy, Terms and Advertise pages |
+| `DATABASE_URL` | Postgres connection string (e.g. from Neon). When set, players and reports are stored in Postgres instead of files. Required on hosts without permanent disks, like Render's free plan |
 | `DATA_DIR` | Where player data and reports are saved. Defaults to the Railway volume if one is attached, otherwise `./data` |
 | `SESSION_SECRET` | Long random string used to sign login cookies. **Required in production** (`openssl rand -hex 32`) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Turns on "Continue with Google" |
@@ -99,11 +128,15 @@ Each provider only appears on the sign-in screen once its two env vars are set. 
 
 **Adding another provider** (Apple, Twitch, X…): add one entry to `PROVIDERS` in `server/auth.js` with its authorize URL, token URL, scope and a function that returns the user's account ID.
 
-**Banning a player:** reports in `reports.jsonl` include the reported player's ID. Set `"banned": true` on that player in `players.json` and restart. They're signed out and can't sign back in with that account. On Railway, edit the files on the volume with `railway volume browse /`, then restart the service.
+**Banning a player:** reports in `reports.jsonl` include the reported player's ID. Set `"banned": true` on that player in `players.json` and restart. They're signed out and can't sign back in with that account. On Railway, edit the files on the volume with `railway volume browse /`, then restart the service. With Postgres (e.g. Neon's SQL Editor), run `UPDATE players SET data = jsonb_set(data, '{banned}', 'true') WHERE data->>'name' = 'TheirNickname';` and restart the service.
 
 ## Data and legal pages
 
-Player data is saved to `players.json` and reports to `reports.jsonl` in the data folder (the Railway volume, or `./data` locally, which is gitignored). Reports older than 12 months are deleted automatically when the server starts, as the Privacy Policy promises.
+Where data is saved:
+- **With `DATABASE_URL` set:** in Postgres, in the `players` and `reports` tables. The tables are created automatically on first start.
+- **Otherwise:** in `players.json` and `reports.jsonl` in the data folder (the Railway volume, or `./data` locally, which is gitignored).
+
+Changes are saved about once a second and always when the host shuts the server down. Reports older than 12 months are deleted automatically when the server starts, as the Privacy Policy promises.
 
 - **Privacy Policy** at `/privacy.html` and **Terms of Service** at `/terms.html`, linked from the footer, the sign-in screen and the rules.
 - **Account deletion:** players can delete their account and all game data themselves, from the Privacy page or the **Delete account** link under Your stats. This also satisfies Facebook's data-deletion requirement.
@@ -121,7 +154,8 @@ server/
   question-bank/ 1,280 questions: one file per category
   ranks.js       rank tiers and difficulty mix per rank
   auth.js        sign-in with Google / Facebook / Discord, signed session cookies
-  store.js       JSON-file player store (linked accounts, ratings, stats)
+  store.js       player store (linked accounts, ratings, stats), saved in batches
+  persistence.js where data is saved: Postgres, JSON files, or memory
   elo.js         rating math
   moderation.js  chat/name filtering and rate limiting
 public/          single-page frontend (vanilla JS, no build step)
