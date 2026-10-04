@@ -27,23 +27,63 @@ test('scoring: correct answers get base + speed bonus, doubled in final round', 
   assert.equal(scoreAnswer({ ...base, correct: true, elapsedMs: 0, multiplier: 1 }), 150);
   assert.equal(scoreAnswer({ ...base, correct: true, elapsedMs: 5000, multiplier: 1 }), 125);
   assert.equal(scoreAnswer({ ...base, correct: true, elapsedMs: 10000, multiplier: 2 }), 200);
+  // Harder questions are worth more base points.
+  assert.equal(scoreAnswer({ ...base, correct: true, elapsedMs: 10000, multiplier: 1, level: 4, difficultyBonus: 20 }), 160);
 });
 
-test('questions: every entry has 4 unique choices and picks are well-formed', () => {
+test('question bank: 1,280 unique questions, 16 categories, 20 per difficulty, 4 unique choices', () => {
+  const all = Object.values(BANK).flat();
+  assert.equal(all.length, 1280);
+  assert.equal(Object.keys(BANK).length, 16);
+  assert.equal(new Set(all.map((q) => q.text.toLowerCase())).size, all.length, 'no duplicate questions');
   for (const [cat, entries] of Object.entries(BANK)) {
-    assert.ok(entries.length >= 3, `${cat} needs at least 3 questions`);
+    for (const level of [1, 2, 3, 4]) {
+      assert.equal(entries.filter((e) => e.level === level).length, 20, `${cat} level ${level}`);
+    }
     for (const e of entries) {
-      assert.equal(e.length, 5, `bad entry in ${cat}: ${e[0]}`);
-      assert.equal(new Set(e.slice(1)).size, 4, `duplicate choice in ${cat}: ${e[0]}`);
+      const choices = [e.correct, ...e.wrong];
+      assert.equal(choices.length, 4, `bad entry in ${cat}: ${e.text}`);
+      assert.equal(new Set(choices.map((c) => c.toLowerCase())).size, 4, `duplicate choice in ${cat}: ${e.text}`);
     }
   }
-  const cats = pickCategories(3);
-  assert.equal(new Set(cats).size, 3);
-  const qs = pickQuestions(cats[0], 3);
-  assert.equal(qs.length, 3);
-  for (const q of qs) {
-    const original = BANK[q.category].find((e) => e[0] === q.text);
-    assert.equal(q.choices[q.answer], original[1]);
+});
+
+test('pickQuestions follows difficulty weights, avoids recently seen questions, keeps answer keys right', () => {
+  const cat = pickCategories(1)[0];
+  const expertOnly = pickQuestions(cat, 3, { weights: [0, 0, 0, 1] });
+  assert.ok(expertOnly.every((q) => q.level === 4));
+  const easyOnly = pickQuestions(cat, 3, { weights: [1, 0, 0, 0] });
+  assert.ok(easyOnly.every((q) => q.level === 1));
+
+  const seen = new Set(BANK[cat].filter((e) => e.level === 1).slice(0, 18).map((e) => e.id));
+  const fresh = pickQuestions(cat, 2, { weights: [1, 0, 0, 0], exclude: seen });
+  assert.ok(fresh.every((q) => !seen.has(q.id)), 'unseen questions preferred');
+
+  for (const q of [...expertOnly, ...easyOnly]) {
+    const original = BANK[q.category].find((e) => e.id === q.id);
+    assert.equal(q.choices[q.answer], original.correct);
+  }
+});
+
+test('ranks: thresholds, progress and harder questions at higher ranks', () => {
+  const { rankFor, rankInfo, roundWeights, RANKS } = require('../server/ranks');
+  assert.equal(rankFor(0).name, 'Bronze');
+  assert.equal(rankFor(1000).name, 'Silver');
+  assert.equal(rankFor(1100).name, 'Gold');
+  assert.equal(rankFor(2500).name, 'Grandmaster');
+  assert.equal(RANKS.length, 7);
+  const info = rankInfo(1000);
+  assert.equal(info.next.name, 'Gold');
+  assert.equal(info.progress, 0.5);
+  assert.equal(rankInfo(2000).next, null);
+
+  const avg = (w) => w.reduce((sum, x, i) => sum + x * (i + 1), 0) / w.reduce((a, b) => a + b, 0);
+  assert.ok(avg(roundWeights(800, 0, 3)) < avg(roundWeights(1200, 0, 3)));
+  assert.ok(avg(roundWeights(1200, 0, 3)) < avg(roundWeights(2000, 0, 3)));
+  assert.ok(avg(roundWeights(1200, 0, 3)) < avg(roundWeights(1200, 2, 3)), 'final round is harder');
+  for (const r of [0, 1, 2]) {
+    const w = roundWeights(1500, r, 3);
+    assert.ok(Math.abs(w.reduce((a, b) => a + b, 0) - 1) < 1e-9);
   }
 });
 
@@ -89,6 +129,12 @@ test('store: accounts map to one player and results update rating/streaks', () =
   assert.equal(p.bestStreak, 2);
   assert.equal(p.streak, 0);
   assert.equal(store.leaderboard()[0].accuracy, 48);
+  assert.equal(p.peakRating, 1030);
+  assert.equal(store.leaderboard()[0].rank.name, 'Silver');
+
+  store.rememberQuestions(player.id, Array.from({ length: 450 }, (_, i) => `q${i}`));
+  assert.equal(p.recentQuestions.length, 400);
+  assert.equal(p.recentQuestions.at(-1), 'q449');
 });
 
 test('signed cookies: tampering is detected', () => {

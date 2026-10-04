@@ -12,6 +12,7 @@ const { PlayerStore, publicProfile } = require('./store');
 const { ratingDeltas } = require('./elo');
 const { cleanChat, cleanName, createRateLimiter } = require('./moderation');
 const { setupAuth, providersFromEnv } = require('./auth');
+const { rankFor, RANKS, DIFFICULTY_LABELS } = require('./ranks');
 
 function createApp({
   dataDir = path.join(__dirname, '..', 'data'),
@@ -25,6 +26,9 @@ function createApp({
     (process.env.NODE_ENV !== 'production' && Object.keys(providers).length === 0),
   sessionSecret = process.env.SESSION_SECRET,
   publicUrl = process.env.PUBLIC_URL || null,
+  // Rating-based matchmaking: start by looking ±baseGap rating points away, widening
+  // by gapPerSecond while waiting, so nobody waits forever in a quiet queue.
+  matchmaking = { baseGap: 150, gapPerSecond: 25, tickMs: 1000 },
 } = {}) {
   if (!sessionSecret) {
     if (process.env.NODE_ENV === 'production') throw new Error('SESSION_SECRET must be set in production');
@@ -47,7 +51,17 @@ function createApp({
   const auth = setupAuth(app, { store, providers, devLogin, secret: sessionSecret, publicUrl });
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.get('/api/leaderboard', (_req, res) => res.json(store.leaderboard(50)));
-  app.get('/api/config', (_req, res) => res.json({ ads, iceServers, difficulties: Object.keys(DIFFICULTIES) }));
+  const rankGuide = RANKS.map((r) => ({
+    name: r.name,
+    icon: r.icon,
+    color: r.color,
+    min: r.min,
+    mix: r.weights
+      .map((w, i) => ({ label: DIFFICULTY_LABELS[i + 1], pct: Math.round(w * 100) }))
+      .filter((d) => d.pct > 0),
+  }));
+  app.get('/api/config', (_req, res) =>
+    res.json({ ads, iceServers, ranks: rankGuide, difficulties: Object.keys(DIFFICULTIES) }));
   app.get('/api/health', (_req, res) => res.json({ ok: true, online: sessions.size }));
   app.get('/ads.txt', (_req, res) => {
     if (!ads.adsenseClient) return res.status(404).end();
@@ -98,6 +112,8 @@ function createApp({
       for (const p of humans) {
         const stats = match.stats[p.id];
         const outcome = winnerId === null ? 'draw' : winnerId === p.id ? 'win' : 'loss';
+        const before = rankFor(store.get(p.id).rating);
+        store.rememberQuestions(p.id, match.askedIds);
         const rec = store.recordResult(p.id, {
           result: outcome,
           ratingDelta: deltas ? deltas[p.id] : 0,
@@ -105,7 +121,9 @@ function createApp({
           correct: stats.correct,
           answered: stats.answered,
         });
-        result[p.id] = { ratingDelta: deltas ? deltas[p.id] : 0, rating: rec.rating };
+        const after = rankFor(rec.rating);
+        const rankChange = after.min > before.min ? 'up' : after.min < before.min ? 'down' : null;
+        result[p.id] = { ratingDelta: deltas ? deltas[p.id] : 0, rating: rec.rating, rankChange };
       }
       for (const s of sessionsInMatch) {
         s.socket.emit('profile', publicProfile(s.player));
@@ -116,10 +134,17 @@ function createApp({
 
   function startMatch(sessionList, opponents, ranked, video = false) {
     const participants = [...sessionList.map(participantFor), ...opponents];
+    // Question difficulty follows the human players' ratings (bots don't count),
+    // and questions either player saw recently are avoided.
+    const humans = sessionList.map((s) => s.player);
+    const rating = Math.round(humans.reduce((sum, p) => sum + p.rating, 0) / humans.length);
+    const exclude = new Set(humans.flatMap((p) => p.recentQuestions || []));
     const match = new Match({
       players: participants,
       ranked,
       video,
+      rating,
+      exclude,
       config: matchConfig,
       onEnd: handleMatchEnd(sessionList),
     });
@@ -130,25 +155,54 @@ function createApp({
     return match;
   }
 
-  function tryMatchmake(session) {
-    // Camera and text players have separate queues: nobody gets put on camera unexpectedly.
-    const opponent = queue.find(
-      (other) =>
-        other !== session &&
-        other.video === session.video &&
-        other.player.id !== session.player.id &&
-        !isBlocked(session, other),
-    );
-    if (!opponent) {
-      if (!queue.includes(session)) queue.push(session);
-      const sameMode = queue.filter((s) => s.video === session.video);
-      session.socket.emit('queued', { position: sameMode.indexOf(session) + 1, video: session.video });
-      return;
-    }
-    removeFromQueue(opponent);
-    removeFromQueue(session);
-    startMatch([opponent, session], [], true, session.video);
+  /** How far apart in rating a waiting player is willing to be matched. */
+  function ratingGap(session, now) {
+    const waitedSec = (now - session.queuedAt) / 1000;
+    return matchmaking.baseGap + matchmaking.gapPerSecond * waitedSec;
   }
+
+  /** The closest-rated compatible opponent within either player's current rating gap. */
+  function findOpponent(session, now = Date.now()) {
+    let best = null;
+    let bestDiff = Infinity;
+    for (const other of queue) {
+      // Camera and text players have separate queues: nobody gets put on camera unexpectedly.
+      if (other === session || other.video !== session.video) continue;
+      if (other.player.id === session.player.id || isBlocked(session, other)) continue;
+      const diff = Math.abs(other.player.rating - session.player.rating);
+      if (diff > Math.max(ratingGap(session, now), ratingGap(other, now))) continue;
+      if (diff < bestDiff) {
+        best = other;
+        bestDiff = diff;
+      }
+    }
+    return best;
+  }
+
+  function pair(a, b) {
+    removeFromQueue(a);
+    removeFromQueue(b);
+    startMatch([a, b], [], true, a.video);
+  }
+
+  function tryMatchmake(session) {
+    session.queuedAt = Date.now();
+    const opponent = findOpponent(session);
+    if (opponent) return pair(opponent, session);
+    if (!queue.includes(session)) queue.push(session);
+    const sameMode = queue.filter((s) => s.video === session.video);
+    session.socket.emit('queued', { position: sameMode.indexOf(session) + 1, video: session.video });
+  }
+
+  // Re-check the queue regularly: rating gaps widen the longer people wait.
+  const matchmakingTimer = setInterval(() => {
+    for (const session of [...queue]) {
+      if (!queue.includes(session)) continue;
+      const opponent = findOpponent(session);
+      if (opponent) pair(session, opponent);
+    }
+  }, matchmaking.tickMs);
+  matchmakingTimer.unref();
 
   function broadcastStats() {
     let inMatch = 0;
@@ -300,6 +354,7 @@ function createApp({
 
   function close() {
     clearInterval(statsTimer);
+    clearInterval(matchmakingTimer);
     store.flush();
     io.close();
     httpServer.close();

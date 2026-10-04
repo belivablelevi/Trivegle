@@ -8,9 +8,14 @@ Trivegle is a trivia practice app that works like Omegle and OMOGLE. You get mat
 
 - **Sign in required** with **Google, Facebook or Discord**. Only the provider's account ID is stored: no real name, email or photo. Players choose a unique nickname, and that's all strangers see.
 - **Random 1v1 matchmaking** ("Battle a stranger") plus a **Next stranger** button, Omegle-style.
-- **Multi-round battles:** 3 rounds × 3 questions across 8 categories. Faster answers earn bonus points, and **the final round is worth double**.
+- **1,280 questions** across **16 categories**: General Knowledge, Science, History, Geography, Movies & TV, Music, Sports, Gaming, Internet Culture, Food & Drink, Literature, Animals & Nature, Technology, Math & Logic, Mythology, and Language & Words. Each category has 20 questions at each of 4 difficulty levels: Easy, Medium, Hard and Expert.
+- **Multi-round battles:** 3 rounds × 3 questions. Faster answers earn bonus points, harder questions are worth more, and **the final round is worth double**.
+- **7 ranks:** 🥉 Bronze, 🥈 Silver (where new players start), 🥇 Gold, 💠 Platinum, 💎 Diamond, 👑 Master and 🗿 Grandmaster. Players see a progress bar to their next rank, their peak rating, and a "Promoted!" or "Dropped" banner after matches.
+- **Difficulty scales with rank:** each rank has its own mix of Easy/Medium/Hard/Expert questions. A match uses the average rating of both players (or the player's own rating in practice), and later rounds lean harder.
+- **No repeats:** each player's last 400 questions are skipped when picking new ones.
+- **Rating-based matchmaking:** players are paired with the closest rating available within ±150. The range widens the longer someone waits, so nobody sits in the queue forever.
 - **Chat break between rounds** with a random conversation topic ("Pineapple on pizza: yes or no?"). Chat stays open after the match so players can say GG.
-- **Elo leaderboard:** wins, losses, draws, best streak and accuracy. Beating higher-rated players is worth more. Leaving mid-match counts as a forfeit.
+- **Elo leaderboard:** rank badges, wins, losses, draws, best streak and accuracy. Beating higher-rated players is worth more. Leaving mid-match counts as a forfeit.
 - **Text mode or Camera mode.** Text mode (the default, 13+) is chat only. Camera mode (18+, opt-in) adds Omegle-style video: two equal-sized cameras stacked on the left (stranger on top, you below), with the game and chat beside them:
   - Camera players are only matched with other camera players.
   - Video goes directly between the two players (WebRTC); it never passes through or gets stored on the server.
@@ -84,7 +89,9 @@ server/
   app.js         Express + Socket.IO: matchmaking, chat, reports, REST API
   match.js       the match engine (rounds, questions, scoring, breaks, forfeits); doesn't touch sockets
   bot.js         practice bot with easy/medium/hard accuracy and speed
-  questions.js   question bank (8 categories) and chat-break topics
+  questions.js   loads the question bank, picks questions by difficulty, chat-break topics
+  question-bank/ 1,280 questions: one file per category
+  ranks.js       rank tiers and difficulty mix per rank
   auth.js        sign-in with Google / Facebook / Discord, signed session cookies
   store.js       JSON-file player store (linked accounts, ratings, stats)
   elo.js         rating math
@@ -98,7 +105,38 @@ test/            node:test suites
 
 ## Adding questions
 
-Add entries to `BANK` in `server/questions.js` as `[question, correct, wrong1, wrong2, wrong3]`. Choices are shuffled for each match. Each category needs at least 3 questions. A new category key becomes a new round theme automatically, which is also how a **sponsored category** works.
+Questions live in `server/question-bank/`, one file per category:
+
+```js
+module.exports = {
+  category: "Science",
+  questions: [
+    // [difficulty, question, correct answer, wrong 1, wrong 2, wrong 3]
+    [1, "What planet is known as the Red Planet?", "Mars", "Venus", "Jupiter", "Mercury"],
+    [4, "What is the chemical symbol for tungsten?", "W", "Tu", "Tg", "Ts"],
+  ],
+};
+```
+
+- Difficulty is `1` Easy, `2` Medium, `3` Hard or `4` Expert. Always list the correct answer first; choices are shuffled for each match.
+- Adding a new file adds a new category automatically. That's also how a **sponsored category** works.
+- `npm test` checks every question for duplicates, 4 distinct choices and an even spread of difficulties (it currently expects exactly 20 per level per category; update the test if you add more).
+
+## Ranks and difficulty
+
+Rank thresholds, names, icons and each rank's difficulty mix are all in `server/ranks.js`:
+
+| Rank | Rating | Question mix (Easy / Medium / Hard / Expert) |
+|------|--------|-----------------------------------------------|
+| 🥉 Bronze | under 900 | 70 / 30 / 0 / 0 |
+| 🥈 Silver | 900+ | 50 / 40 / 10 / 0 |
+| 🥇 Gold | 1100+ | 25 / 45 / 25 / 5 |
+| 💠 Platinum | 1300+ | 10 / 40 / 40 / 10 |
+| 💎 Diamond | 1500+ | 0 / 25 / 50 / 25 |
+| 👑 Master | 1700+ | 0 / 10 / 45 / 45 |
+| 🗿 Grandmaster | 1900+ | 0 / 0 / 35 / 65 |
+
+Each round after the first shifts a little of that mix toward harder questions, so the double-points final is the toughest. Base points are 100 for Easy, 120 for Medium, 140 for Hard and 160 for Expert, plus up to 50 for speed.
 
 ## Before going to production
 

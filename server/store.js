@@ -4,7 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+const { rankInfo } = require('./ranks');
+
 const STARTING_RATING = 1000;
+const RECENT_QUESTIONS = 400; // how many recent question ids to avoid repeating
 
 /**
  * Tiny JSON-file player store. Good enough for a single server; swap for
@@ -59,6 +62,8 @@ class PlayerStore {
       name: nickname || `Player${Math.floor(1000 + Math.random() * 9000)}`,
       needsName: !nickname,
       rating: STARTING_RATING,
+      peakRating: STARTING_RATING,
+      recentQuestions: [],
       wins: 0,
       losses: 0,
       draws: 0,
@@ -109,6 +114,7 @@ class PlayerStore {
       p.practiceGames += 1;
     } else {
       p.rating = Math.max(100, p.rating + ratingDelta);
+      p.peakRating = Math.max(p.peakRating || STARTING_RATING, p.rating);
       if (result === 'win') {
         p.wins += 1;
         p.streak += 1;
@@ -124,6 +130,14 @@ class PlayerStore {
     return p;
   }
 
+  /** Remember which questions a player has seen so new matches avoid repeats. */
+  rememberQuestions(id, questionIds) {
+    const p = this.players.get(id);
+    if (!p) return;
+    p.recentQuestions = [...(p.recentQuestions || []), ...questionIds].slice(-RECENT_QUESTIONS);
+    this.scheduleSave();
+  }
+
   leaderboard(limit = 50) {
     return [...this.players.values()]
       .filter((p) => p.wins + p.losses + p.draws > 0)
@@ -133,12 +147,14 @@ class PlayerStore {
   }
 }
 
-function publicProfile(p, rank) {
+function publicProfile(p, position) {
   const games = p.wins + p.losses + p.draws;
   return {
-    rank,
+    position, // leaderboard position (1 = top)
     name: p.name,
     rating: p.rating,
+    peakRating: p.peakRating || p.rating,
+    rank: rankInfo(p.rating),
     wins: p.wins,
     losses: p.losses,
     draws: p.draws,

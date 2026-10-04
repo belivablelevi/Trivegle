@@ -240,3 +240,55 @@ test('camera matches relay WebRTC signaling only to the opponent; text matches d
   assert.equal(relayed, false);
   for (const s of [a, b, c, d]) s.socket.close();
 });
+
+test('matchmaking pairs similar ratings first and widens the range while waiting', async (t) => {
+  const srv = await startServer({ matchmaking: { baseGap: 150, gapPerSecond: 1000, tickMs: 50 } });
+  t.after(() => srv.close());
+  const pro = await client(srv.url, 'ProPlayer');
+  const newbie = await client(srv.url, 'NewPlayer');
+  const peer = await client(srv.url, 'PeerPlayer');
+  const late = await client(srv.url, 'LatePlayer');
+  t.after(() => [pro, newbie, peer, late].forEach((c) => c.socket.close()));
+  srv.store.get([...srv.store.players.values()].find((p) => p.name === 'ProPlayer').id).rating = 1600;
+
+  // Pro queues first, newbie second: 600 apart, so newbie isn't matched instantly...
+  const proQueued = once(pro.socket, 'queued');
+  pro.socket.emit('queue', { mode: 'ranked' });
+  await proQueued;
+  const peerFound = once(peer.socket, 'matchFound');
+  newbie.socket.emit('queue', { mode: 'ranked' });
+  peer.socket.emit('queue', { mode: 'ranked' });
+  // ...and a same-rated peer arriving right after gets paired with the newbie.
+  const m = await peerFound;
+  assert.equal(m.opponent.name, 'NewPlayer');
+  assert.equal(m.questionTier.name, 'Silver');
+
+  // Alone in the queue, the pro still gets matched once the range has widened.
+  const proFound = once(pro.socket, 'matchFound');
+  late.socket.emit('queue', { mode: 'ranked' });
+  const pm = await proFound;
+  assert.equal(pm.opponent.name, 'LatePlayer');
+  assert.equal(pm.you.rank.name, 'Diamond');
+  assert.equal(pm.questionTier.name, 'Platinum', 'questions follow the average of both ratings (1300)');
+});
+
+test('questions report difficulty and players do not see repeats in their next match', async (t) => {
+  const srv = await startServer();
+  t.after(() => srv.close());
+  const p = await client(srv.url, 'Repeater');
+  const seen = [];
+  p.socket.on('question', (q) => {
+    assert.ok([1, 2, 3, 4].includes(q.difficulty));
+    assert.ok(['Easy', 'Medium', 'Hard', 'Expert'].includes(q.difficultyLabel));
+    seen.push(q.text);
+  });
+  for (let i = 0; i < 2; i++) {
+    const end = once(p.socket, 'matchEnd');
+    p.socket.emit('queue', { mode: 'practice', difficulty: 'hard' });
+    const result = await end;
+    assert.ok(result.rank && result.rank.name);
+  }
+  assert.equal(seen.length, 8);
+  assert.equal(new Set(seen).size, 8, 'no repeated questions across the two matches');
+  p.socket.close();
+});

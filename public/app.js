@@ -107,9 +107,43 @@
   }
 
   // ---------- Profile & leaderboard ----------
+  // ---------- Ranks ----------
+  function rankBadge(rank, big = false) {
+    if (!rank) return el('span');
+    const b = el('span', { class: `rank-badge${big ? ' big' : ''}`, title: `${rank.name} rank` }, `${rank.icon} ${rank.name}`);
+    b.style.setProperty('--rank-color', rank.color);
+    return b;
+  }
+
+  function renderRanksGuide() {
+    const ranks = state.config.ranks || [];
+    const current = state.profile?.rank?.name;
+    $('#ranks-list').replaceChildren(...ranks.map((r, i) => {
+      const next = ranks[i + 1];
+      const mix = el('div', { class: 'diff-mix', title: r.mix.map((d) => `${d.pct}% ${d.label}`).join(', ') },
+        r.mix.map((d) => {
+          const seg = el('span', { class: `diff-${['Easy', 'Medium', 'Hard', 'Expert'].indexOf(d.label) + 1}` });
+          seg.style.width = `${d.pct}%`;
+          return seg;
+        }));
+      return el('div', { class: `rank-line${r.name === current ? ' current' : ''}` },
+        rankBadge(r), el('span', { class: 'muted' }, next ? `${r.min}+` : `${r.min}+ 🔝`), mix);
+    }), el('p', { class: 'muted small-print' },
+      el('span', { class: 'diff-pill diff-1' }, 'Easy'), ' ', el('span', { class: 'diff-pill diff-2' }, 'Medium'), ' ',
+      el('span', { class: 'diff-pill diff-3' }, 'Hard'), ' ', el('span', { class: 'diff-pill diff-4' }, 'Expert')));
+  }
+  $$('[data-modal="ranks-modal"]').forEach((b) => b.addEventListener('click', renderRanksGuide));
+
   function renderProfile(p) {
     if (!p) return;
     state.profile = p;
+    if (p.rank) {
+      $('#p-rank').replaceWith(Object.assign(rankBadge(p.rank, true), { id: 'p-rank' }));
+      $('#p-rank-bar').style.width = `${Math.round(p.rank.progress * 100)}%`;
+      $('#p-rank-next').textContent = p.rank.next
+        ? `${p.rank.next.at - p.rating} to ${p.rank.next.name} · peak ${p.peakRating}`
+        : `Top rank! Peak ${p.peakRating}`;
+    }
     $('#p-rating').textContent = p.rating;
     $('#p-record').textContent = `${p.wins}–${p.losses}`;
     $('#p-streak').textContent = p.streak;
@@ -121,11 +155,12 @@
     try { rows = await (await fetch('/api/leaderboard')).json(); } catch { return; }
     const mini = $('#lb-preview');
     mini.replaceChildren(...(rows.length
-      ? rows.slice(0, 8).map((r) => el('li', {}, el('span', {}, r.name), el('span', {}, r.rating)))
+      ? rows.slice(0, 8).map((r) => el('li', {},
+        el('span', {}, el('span', { class: 'rank-icon', title: r.rank.name }, r.rank.icon), r.name), el('span', {}, r.rating)))
       : [el('li', { class: 'muted' }, 'No ranked games yet — be the first!')]));
     if (full) {
       $('#lb-body').replaceChildren(...rows.map((r) => el('tr', {},
-        el('td', {}, r.rank), el('td', {}, r.name), el('td', {}, r.rating),
+        el('td', {}, r.position), el('td', {}, r.name), el('td', {}, rankBadge(r.rank)), el('td', {}, r.rating),
         el('td', {}, `${r.wins}–${r.losses}–${r.draws}`), el('td', {}, r.bestStreak), el('td', {}, `${r.accuracy}%`))));
     }
   }
@@ -524,8 +559,8 @@
     if (m.video) setupPeer(m.rtcInitiator);
     else closePeer();
     $('#chat-log').replaceChildren();
-    $('#you-name').textContent = `${m.you.name} (${m.you.rating})`;
-    $('#opp-name').textContent = `${m.opponent.name} (${m.opponent.rating})`;
+    $('#you-name').replaceChildren(`${m.you.name} (${m.you.rating}) `, rankBadge(m.you.rank));
+    $('#opp-name').replaceChildren(rankBadge(m.opponent.rank), ` ${m.opponent.name} (${m.opponent.rating})`);
     $('#opp-label').textContent = m.opponent.isBot ? '🤖 Practice bot' : 'Stranger';
     $('#round-label').textContent = `Round 1/${m.rounds}`;
     $('#mult-label').hidden = true;
@@ -533,7 +568,8 @@
     addChat('system', m.opponent.isBot
       ? `Practice match vs ${m.opponent.name}. Not ranked.`
       : `You're now battling a random stranger${m.video ? ' on camera' : ''}: ${m.opponent.name}. Say hi!`);
-    splash(m.ranked ? 'Ranked battle' : 'Practice', `vs ${m.opponent.name}`, `Categories: ${m.categories.join(' · ')}`);
+    splash(m.ranked ? 'Ranked battle' : 'Practice', `vs ${m.opponent.name}`,
+      `Categories: ${m.categories.join(' · ')} · ${m.questionTier.icon} ${m.questionTier.name}-tier questions`);
   });
 
   socket.on('roundStart', ({ round, totalRounds, category, multiplier, scores }) => {
@@ -550,7 +586,8 @@
     stage.replaceChildren(el('div', { class: 'stage-card' },
       el('div', { class: 'q-meta' },
         el('span', {}, `${q.category} · Q${q.number}/${q.of}`),
-        el('span', {}, q.multiplier > 1 ? '2× points' : '')),
+        el('span', {}, el('span', { class: `diff-pill diff-${q.difficulty}` }, q.difficultyLabel),
+          q.multiplier > 1 ? ' · 2× points' : '')),
       el('div', { class: 'timer' }, bar),
       el('div', { class: 'q-text' }, q.text),
       el('div', { class: 'choices' }, q.choices.map((c, i) =>
@@ -615,7 +652,7 @@
 
   socket.on('chat', ({ from, text }) => addChat(from, text));
 
-  socket.on('matchEnd', ({ outcome, reason, scores, stats, ranked, ratingDelta, rating }) => {
+  socket.on('matchEnd', ({ outcome, reason, scores, stats, ranked, ratingDelta, rating, rank, rankChange }) => {
     stopTimers();
     if (state.match) state.match.ended = true;
     setScores(scores);
@@ -630,8 +667,10 @@
       el('p', { class: 'muted' }, why),
       el('p', {}, `${stats.correct}/${stats.answered} correct`),
       ranked
-        ? el('p', { class: `delta ${ratingDelta >= 0 ? 'up' : 'down'}` }, `${ratingDelta >= 0 ? '+' : ''}${ratingDelta} → ${rating}`)
+        ? el('p', { class: `delta ${ratingDelta >= 0 ? 'up' : 'down'}` }, `${ratingDelta >= 0 ? '+' : ''}${ratingDelta} → ${rating} `, rankBadge(rank))
         : el('p', { class: 'muted' }, 'Practice match — rating unchanged.'),
+      rankChange === 'up' ? el('p', { class: 'rank-change up' }, `🎉 Promoted to ${rank.icon} ${rank.name}! Harder questions unlocked.`) : null,
+      rankChange === 'down' ? el('p', { class: 'rank-change down' }, `Dropped to ${rank.icon} ${rank.name}. Win it back!`) : null,
       el('div', { class: 'cta-row' },
         el('button', { class: 'btn primary', onclick: () => $('#next-btn').click() }, '⏭ Next stranger'),
         el('button', { class: 'btn ghost', onclick: () => {

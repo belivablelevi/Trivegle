@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { pickCategories, pickQuestions, pickTopic } = require('./questions');
+const { rankInfo, roundWeights, DIFFICULTY_LABELS } = require('./ranks');
 
 const DEFAULT_CONFIG = {
   rounds: 3,
@@ -12,13 +13,15 @@ const DEFAULT_CONFIG = {
   revealMs: 2500,
   breakMs: 25000,
   basePoints: 100,
+  difficultyBonus: 20, // extra base points per difficulty level above Easy
   speedBonus: 50,
 };
 
-function scoreAnswer({ correct, elapsedMs, questionMs, multiplier, basePoints, speedBonus }) {
+function scoreAnswer({ correct, elapsedMs, questionMs, multiplier, basePoints, speedBonus, level = 1, difficultyBonus = 0 }) {
   if (!correct) return 0;
   const remaining = Math.max(0, questionMs - elapsedMs) / questionMs;
-  return Math.round((basePoints + speedBonus * remaining) * multiplier);
+  const base = basePoints + difficultyBonus * (level - 1);
+  return Math.round((base + speedBonus * remaining) * multiplier);
 }
 
 /**
@@ -27,7 +30,16 @@ function scoreAnswer({ correct, elapsedMs, questionMs, multiplier, basePoints, s
  * The match never talks to sockets directly, which keeps it testable.
  */
 class Match {
-  constructor({ players, ranked, video = false, config = {}, onEnd = () => ({}), rand = Math.random }) {
+  constructor({
+    players,
+    ranked,
+    video = false,
+    rating = null, // decides question difficulty; defaults to the players' average rating
+    exclude = new Set(), // question ids the players saw recently
+    config = {},
+    onEnd = () => ({}),
+    rand = Math.random,
+  }) {
     if (players.length !== 2) throw new Error('A match needs exactly 2 players');
     this.id = crypto.randomUUID();
     this.players = players;
@@ -36,6 +48,9 @@ class Match {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.onEnd = onEnd;
     this.rand = rand;
+    this.rating = rating ?? Math.round(players.reduce((sum, p) => sum + p.rating, 0) / players.length);
+    this.exclude = exclude;
+    this.askedIds = [];
     this.categories = pickCategories(this.config.rounds, rand);
     this.scores = Object.fromEntries(players.map((p) => [p.id, 0]));
     this.stats = Object.fromEntries(players.map((p) => [p.id, { correct: 0, answered: 0 }]));
@@ -79,8 +94,9 @@ class Match {
         video: this.video,
         // Exactly one side creates the WebRTC offer.
         rtcInitiator: this.video && p === this.players[0],
-        you: { name: p.name, rating: p.rating },
-        opponent: { name: opp.name, rating: opp.rating, isBot: !!opp.isBot },
+        you: { name: p.name, rating: p.rating, rank: rankInfo(p.rating) },
+        opponent: { name: opp.name, rating: opp.rating, rank: rankInfo(opp.rating), isBot: !!opp.isBot },
+        questionTier: rankInfo(this.rating),
         categories: this.categories,
         rounds,
         questionsPerRound,
@@ -96,7 +112,12 @@ class Match {
     this.phase = 'roundIntro';
     this.round = r;
     this.ready.clear();
-    this.roundQuestions = pickQuestions(this.categories[r], this.config.questionsPerRound, this.rand);
+    this.roundQuestions = pickQuestions(this.categories[r], this.config.questionsPerRound, {
+      weights: roundWeights(this.rating, r, this.config.rounds),
+      exclude: this.exclude,
+      rand: this.rand,
+    });
+    this.askedIds.push(...this.roundQuestions.map((q) => q.id));
     this.roundQ = -1;
     this.multiplier = r === this.config.rounds - 1 ? 2 : 1;
     this.each((p) =>
@@ -126,6 +147,8 @@ class Match {
         number: this.roundQ + 1,
         of: this.roundQuestions.length,
         category: q.category,
+        difficulty: q.level,
+        difficultyLabel: DIFFICULTY_LABELS[q.level],
         text: q.text,
         choices: q.choices,
         durationMs: this.config.questionMs,
@@ -162,6 +185,8 @@ class Match {
         multiplier: this.multiplier,
         basePoints: this.config.basePoints,
         speedBonus: this.config.speedBonus,
+        level: q.level,
+        difficultyBonus: this.config.difficultyBonus,
       });
       this.scores[p.id] += points;
       if (a) this.stats[p.id].answered += 1;
@@ -242,6 +267,8 @@ class Match {
         ranked: this.ranked,
         ratingDelta: ratings[p.id]?.ratingDelta ?? 0,
         rating: ratings[p.id]?.rating ?? p.rating,
+        rank: rankInfo(ratings[p.id]?.rating ?? p.rating),
+        rankChange: ratings[p.id]?.rankChange ?? null, // 'up' | 'down' | null
       });
     });
   }
